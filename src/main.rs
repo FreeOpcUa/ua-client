@@ -24,7 +24,9 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 700.0])
-            .with_title("ua-client"),
+            .with_title("Free Opc Ua Client")
+            .with_app_id("ua-client")
+            .with_decorations(true),
         ..Default::default()
     };
 

@@ -2,18 +2,34 @@
 name = "ua-client"
 version = "0.1.0"
 edition = "2021"
+description = "Native OPC UA browser/inspector GUI built on async-opcua and egui"
+license = "MIT"
+repository = "https://github.com/FreeOpcUa/ua-client"
+homepage = "https://github.com/FreeOpcUa/ua-client"
+readme = "README.md"
+keywords = ["opcua", "opc-ua", "client", "gui", "egui"]
+categories = ["gui", "network-programming"]
 
 [dependencies]
-eframe = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence"] }
+anyhow = "1"
+async-opcua = { version = "0.18", default-features = false, features = [
+  "client"
+] }
+eframe = { version = "0.30", default-features = false, features = [
+  "default_fonts",
+  "glow",
+  "persistence",
+  "wayland",
+  "x11"
+] }
 egui = "0.30"
 egui_extras = "0.30"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = [
+  "macros",
+  "rt-multi-thread",
+  "sync",
+  "time"
+] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-
-[dependencies.async-opcua]
-path = "../async-opcua/async-opcua"
-default-features = false
-features = ["client"]

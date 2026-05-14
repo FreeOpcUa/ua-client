@@ -46,19 +46,21 @@ impl UaApp {
         }
     }
 
-    fn drain_updates(&mut self) {
+    fn drain_updates(&mut self, ctx: &egui::Context) {
         while let Ok(update) = self.update_rx.try_recv() {
-            self.apply_update(update);
+            self.apply_update(ctx, update);
         }
     }
 
-    fn apply_update(&mut self, update: UiUpdate) {
+    fn apply_update(&mut self, ctx: &egui::Context, update: UiUpdate) {
         match update {
             UiUpdate::ConnectStarted => self.model.connection = ConnectionState::Connecting,
             UiUpdate::ConnectFinished(Ok(())) => {
                 self.model.connection = ConnectionState::Connected;
                 self.model.record_successful_connection();
                 tracing::info!("connected to {}", self.model.endpoint_url);
+                let root = self.model.root_node.clone();
+                self.ensure_expanded(ctx, root);
             }
             UiUpdate::ConnectFinished(Err(e)) => {
                 self.model.connection = ConnectionState::Disconnected;
@@ -133,6 +135,18 @@ impl UaApp {
         if self.model.tree.expanded.contains(&node) {
             self.model.tree.expanded.remove(&node);
         } else if self.model.tree.children.contains_key(&node) {
+            self.model.tree.expanded.insert(node);
+        } else if !self.model.tree.loading.contains(&node) {
+            self.model.tree.loading.insert(node.clone());
+            self.spawn_browse_children(ctx, node);
+        }
+    }
+
+    fn ensure_expanded(&mut self, ctx: &egui::Context, node: NodeId) {
+        if self.model.tree.expanded.contains(&node) {
+            return;
+        }
+        if self.model.tree.children.contains_key(&node) {
             self.model.tree.expanded.insert(node);
         } else if !self.model.tree.loading.contains(&node) {
             self.model.tree.loading.insert(node.clone());
@@ -239,7 +253,7 @@ fn forward_logs(
 
 impl eframe::App for UaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_updates();
+        self.drain_updates(ctx);
         let mut actions = Vec::new();
         crate::ui::draw(&self.model, ctx, &mut actions);
         for action in actions {

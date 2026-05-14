@@ -164,6 +164,8 @@ dependencies = [
 [[package]]
 name = "async-opcua"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b41aafb34371afea4ce25f026c5a46e5872d2aca6a3fdcf1fcc12d52636768"
 dependencies = [
  "async-opcua-client",
  "async-opcua-core",
@@ -176,6 +178,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-client"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e33d8045bf3d4187bdb5eb4f224aa7fecb804c63a79ac32ad38950b4f05ac159"
 dependencies = [
  "arc-swap",
  "async-opcua-core",
@@ -197,6 +201,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-core"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a42c80b9cf8b9501a48961895b1f750a550414ce2fe54fe89599394d64277540"
 dependencies = [
  "async-opcua-crypto",
  "async-opcua-types",
@@ -215,6 +221,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-crypto"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "191907b348a30a2f02b910704a0a18a46de78ee32c71efceac6da459104b4d2b"
 dependencies = [
  "aes",
  "async-opcua-types",
@@ -236,6 +244,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-macros"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76e8cb06fbdab437ab32ae38fee132f3c5a4065664cdc2448087e06518103a1b"
 dependencies = [
  "base64 0.22.1",
  "convert_case",
@@ -248,6 +258,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-nodes"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9aa04366fbb50e5e5eab459604657ee0872f1b7f4da7bd0eb086160ccc7cd04"
 dependencies = [
  "async-opcua-macros",
  "async-opcua-types",
@@ -261,6 +273,8 @@ dependencies = [
 [[package]]
 name = "async-opcua-types"
 version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754239d6e4744a6fc46a31de56af8817728474d13ae7af37309f13d549e24630"
 dependencies = [
  "async-opcua-macros",
  "base64 0.22.1",

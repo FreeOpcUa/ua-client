@@ -1,0 +1,19 @@
+[package]
+name = "ua-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence"] }
+egui = "0.30"
+egui_extras = "0.30"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+
+[dependencies.async-opcua]
+path = "../async-opcua/async-opcua"
+default-features = false
+features = ["client"]

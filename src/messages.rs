@@ -1,7 +1,7 @@
 use opcua::types::NodeId;
 
 use crate::model::DetailTab;
-use crate::types::{LogLine, NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
 
 #[derive(Debug, Clone)]
 pub enum UiAction {
@@ -12,6 +12,12 @@ pub enum UiAction {
     NodeSelected(NodeId),
     TabSelected(DetailTab),
     RefreshClicked,
+    OpenEndpointPicker,
+    CloseEndpointPicker,
+    ForceRefreshEndpoints,
+    SelectEndpoint(EndpointInfo),
+    SelectEndpointAndConnect(EndpointInfo),
+    ClearSelectedEndpoint,
 }
 
 #[derive(Debug)]
@@ -32,5 +38,6 @@ pub enum UiUpdate {
         node: NodeId,
         refs: Result<Vec<ReferenceRow>, String>,
     },
+    EndpointsDiscovered(Result<Vec<EndpointInfo>, String>),
     Log(LogLine),
 }

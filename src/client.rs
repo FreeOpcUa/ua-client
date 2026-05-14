@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -5,14 +6,14 @@ use opcua::client::{ClientBuilder, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
 use opcua::types::{
     AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
-    ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask,
+    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask,
     NodeId, ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode,
-    TimestampsToReturn, UserTokenPolicy, Variant,
+    TimestampsToReturn, UserTokenPolicy, UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::types::{NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{EndpointInfo, NodeSummary, ReferenceRow, SecurityMode, TreeChild};
 
 struct Connected {
     session: Arc<Session>,
@@ -35,28 +36,39 @@ impl UaClient {
         }
     }
 
-    pub async fn connect(&self, endpoint_url: &str) -> Result<()> {
+    pub async fn connect(
+        &self,
+        endpoint_url: &str,
+        endpoint: Option<&EndpointInfo>,
+    ) -> Result<()> {
         let mut guard = self.state.lock().await;
         if matches!(*guard, State::Connected(_)) {
             return Err(anyhow!("already connected"));
         }
 
-        let mut client = ClientBuilder::new()
-            .application_name("ua-client")
-            .application_uri("urn:ua-client")
-            .product_uri("urn:ua-client")
-            .trust_server_certs(true)
-            .create_sample_keypair(true)
-            .session_retry_limit(3)
-            .client()
-            .map_err(|errs| anyhow!("failed to build OPC UA client: {errs:?}"))?;
+        let mut client = build_client()?;
+
+        let (policy_uri, mode) = match endpoint {
+            Some(ep) => (
+                ep.security_policy_uri.clone(),
+                security_mode_to_message_mode(ep.security_mode),
+            ),
+            None => (
+                SecurityPolicy::None.to_uri().to_string(),
+                MessageSecurityMode::None,
+            ),
+        };
+        let target_url = match endpoint {
+            Some(ep) if !ep.endpoint_url.is_empty() => ep.endpoint_url.clone(),
+            _ => endpoint_url.to_string(),
+        };
 
         let (session, event_loop) = client
             .connect_to_matching_endpoint(
                 (
-                    endpoint_url,
-                    SecurityPolicy::None.to_str(),
-                    MessageSecurityMode::None,
+                    target_url.as_str(),
+                    policy_uri.as_str(),
+                    mode,
                     UserTokenPolicy::anonymous(),
                 ),
                 IdentityToken::Anonymous,
@@ -72,6 +84,18 @@ impl UaClient {
             event_loop: handle,
         });
         Ok(())
+    }
+
+    pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
+        let client = build_client()?;
+        let descriptions = client
+            .get_server_endpoints_from_url(endpoint_url)
+            .await
+            .map_err(|e| anyhow!("get_server_endpoints failed: {e}"))?;
+        Ok(descriptions
+            .into_iter()
+            .map(endpoint_description_to_info)
+            .collect())
     }
 
     pub async fn disconnect(&self) -> Result<()> {
@@ -283,6 +307,62 @@ async fn has_children_batch(session: &Session, ids: &[NodeId]) -> Vec<bool> {
 
 fn expanded_to_local(eid: &ExpandedNodeId) -> NodeId {
     eid.node_id.clone()
+}
+
+fn build_client() -> Result<opcua::client::Client> {
+    ClientBuilder::new()
+        .application_name("ua-client")
+        .application_uri("urn:ua-client")
+        .product_uri("urn:ua-client")
+        .trust_server_certs(true)
+        .create_sample_keypair(true)
+        .session_retry_limit(3)
+        .client()
+        .map_err(|errs| anyhow!("failed to build OPC UA client: {errs:?}"))
+}
+
+fn security_mode_to_message_mode(m: SecurityMode) -> MessageSecurityMode {
+    match m {
+        SecurityMode::None => MessageSecurityMode::None,
+        SecurityMode::Sign => MessageSecurityMode::Sign,
+        SecurityMode::SignAndEncrypt => MessageSecurityMode::SignAndEncrypt,
+    }
+}
+
+fn message_mode_to_security_mode(m: MessageSecurityMode) -> SecurityMode {
+    match m {
+        MessageSecurityMode::Sign => SecurityMode::Sign,
+        MessageSecurityMode::SignAndEncrypt => SecurityMode::SignAndEncrypt,
+        _ => SecurityMode::None,
+    }
+}
+
+fn endpoint_description_to_info(ep: EndpointDescription) -> EndpointInfo {
+    let policy_uri = ep.security_policy_uri.to_string();
+    let policy_short = SecurityPolicy::from_str(&policy_uri)
+        .map(|p| p.to_string())
+        .unwrap_or_else(|_| policy_uri.clone());
+    let tokens = ep.user_identity_tokens.unwrap_or_default();
+    let supports_anonymous = tokens
+        .iter()
+        .any(|t| matches!(t.token_type, UserTokenType::Anonymous));
+    let supports_username = tokens
+        .iter()
+        .any(|t| matches!(t.token_type, UserTokenType::UserName));
+    let supports_certificate = tokens
+        .iter()
+        .any(|t| matches!(t.token_type, UserTokenType::Certificate));
+
+    EndpointInfo {
+        endpoint_url: ep.endpoint_url.to_string(),
+        security_policy: policy_short,
+        security_policy_uri: policy_uri,
+        security_mode: message_mode_to_security_mode(ep.security_mode),
+        security_level: ep.security_level,
+        supports_anonymous,
+        supports_username,
+        supports_certificate,
+    }
 }
 
 const MAX_VALUE_LEN: usize = 500;

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use opcua::types::{NodeId, ObjectId};
 
-use crate::types::{LogLine, NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
 
 const MAX_LOG_LINES: usize = 1000;
 const MAX_HISTORY: usize = 20;
@@ -50,6 +50,10 @@ pub struct AppModel {
     pub references: Option<Vec<ReferenceRow>>,
     pub references_loading: bool,
     pub log: VecDeque<LogLine>,
+    pub selected_endpoint: Option<EndpointInfo>,
+    pub endpoints_loading: bool,
+    pub discovered_endpoints: Option<Vec<EndpointInfo>>,
+    pub endpoints_dialog_open: bool,
 }
 
 impl Default for AppModel {
@@ -66,6 +70,10 @@ impl Default for AppModel {
             references: None,
             references_loading: false,
             log: VecDeque::with_capacity(MAX_LOG_LINES),
+            selected_endpoint: None,
+            endpoints_loading: false,
+            discovered_endpoints: None,
+            endpoints_dialog_open: false,
         }
     }
 }

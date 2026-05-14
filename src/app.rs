@@ -99,6 +99,19 @@ impl UaApp {
                     }
                 }
             }
+            UiUpdate::EndpointsDiscovered(result) => {
+                self.model.endpoints_loading = false;
+                match result {
+                    Ok(eps) => {
+                        tracing::info!("discovered {} endpoint(s)", eps.len());
+                        self.model.discovered_endpoints = Some(eps);
+                    }
+                    Err(e) => {
+                        tracing::error!("endpoint discovery failed: {e}");
+                        self.model.discovered_endpoints = Some(Vec::new());
+                    }
+                }
+            }
             UiUpdate::Log(line) => self.model.push_log(line),
         }
     }
@@ -116,7 +129,13 @@ impl UaApp {
                     }
                 }
             }
-            UiAction::ConnectClicked => self.spawn_connect(ctx),
+            UiAction::ConnectClicked => {
+                if self.model.selected_endpoint.is_none() {
+                    self.open_endpoint_picker(ctx);
+                } else {
+                    self.spawn_connect(ctx);
+                }
+            }
             UiAction::DisconnectClicked => self.spawn_disconnect(ctx),
             UiAction::NodeToggleExpand(n) => self.toggle_expand(ctx, n),
             UiAction::NodeSelected(n) => self.select_node(ctx, n),
@@ -127,6 +146,29 @@ impl UaApp {
                         self.spawn_browse_references(ctx, node);
                     }
                 }
+            }
+            UiAction::OpenEndpointPicker => {
+                self.open_endpoint_picker(ctx);
+            }
+            UiAction::CloseEndpointPicker => {
+                self.model.endpoints_dialog_open = false;
+            }
+            UiAction::ForceRefreshEndpoints => {
+                if !self.model.endpoints_loading {
+                    self.spawn_discover_endpoints(ctx);
+                }
+            }
+            UiAction::SelectEndpoint(ep) => {
+                self.model.selected_endpoint = Some(ep);
+                self.model.endpoints_dialog_open = false;
+            }
+            UiAction::SelectEndpointAndConnect(ep) => {
+                self.model.selected_endpoint = Some(ep);
+                self.model.endpoints_dialog_open = false;
+                self.spawn_connect(ctx);
+            }
+            UiAction::ClearSelectedEndpoint => {
+                self.model.selected_endpoint = None;
             }
         }
     }
@@ -168,11 +210,39 @@ impl UaApp {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let url = self.model.endpoint_url.clone();
+        let endpoint = self.model.selected_endpoint.clone();
         let ctx = ctx.clone();
         let _ = tx.send(UiUpdate::ConnectStarted);
         self.rt.spawn(async move {
-            let r = client.connect(&url).await.map_err(|e| e.to_string());
+            let r = client
+                .connect(&url, endpoint.as_ref())
+                .await
+                .map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::ConnectFinished(r));
+            ctx.request_repaint();
+        });
+    }
+
+    fn open_endpoint_picker(&mut self, ctx: &egui::Context) {
+        self.model.endpoints_dialog_open = true;
+        if self.model.discovered_endpoints.is_none() && !self.model.endpoints_loading {
+            self.spawn_discover_endpoints(ctx);
+        }
+    }
+
+    fn spawn_discover_endpoints(&mut self, ctx: &egui::Context) {
+        self.model.endpoints_loading = true;
+        self.model.discovered_endpoints = None;
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let url = self.model.endpoint_url.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let r = client
+                .discover_endpoints(&url)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::EndpointsDiscovered(r));
             ctx.request_repaint();
         });
     }

@@ -19,6 +19,35 @@ pub struct NodeSummary {
     pub value: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityMode {
+    None,
+    Sign,
+    SignAndEncrypt,
+}
+
+impl SecurityMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            SecurityMode::None => "None",
+            SecurityMode::Sign => "Sign",
+            SecurityMode::SignAndEncrypt => "SignAndEncrypt",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EndpointInfo {
+    pub endpoint_url: String,
+    pub security_policy: String,
+    pub security_policy_uri: String,
+    pub security_mode: SecurityMode,
+    pub security_level: u8,
+    pub supports_anonymous: bool,
+    pub supports_username: bool,
+    pub supports_certificate: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ReferenceRow {
     pub reference_type: String,

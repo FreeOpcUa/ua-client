@@ -1,4 +1,5 @@
 mod connect_bar;
+mod endpoints_dialog;
 mod log_panel;
 mod node_summary;
 mod tabs;
@@ -37,6 +38,8 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
     egui::CentralPanel::default().show(ctx, |ui| {
         draw_right_split(model, ui, actions);
     });
+
+    endpoints_dialog::draw(model, ctx, actions);
 }
 
 fn draw_right_split(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {

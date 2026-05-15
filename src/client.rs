@@ -225,9 +225,16 @@ impl UaClient {
             .ok_or_else(|| anyhow!("empty browse result"))?;
         let refs = result.references.unwrap_or_default();
 
-        let mut children = Vec::with_capacity(refs.len());
+        let mut seen: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+        let mut children: Vec<TreeChild> = Vec::with_capacity(refs.len());
         for r in &refs {
-            children.push(reference_to_tree_child(r));
+            if is_excluded_tree_reference(&r.reference_type_id) {
+                continue;
+            }
+            let child = reference_to_tree_child(r);
+            if seen.insert(child.node_id.clone()) {
+                children.push(child);
+            }
         }
         let target_ids: Vec<NodeId> = children.iter().map(|c| c.node_id.clone()).collect();
         let has_kids = has_children_batch(&session, &target_ids).await;
@@ -396,6 +403,21 @@ fn escape_browse_name(s: &str) -> String {
     out
 }
 
+fn is_excluded_tree_reference(ref_type: &NodeId) -> bool {
+    if ref_type.namespace != 0 {
+        return false;
+    }
+    let id = match &ref_type.identifier {
+        opcua::types::Identifier::Numeric(n) => *n,
+        _ => return false,
+    };
+    matches!(
+        id,
+        x if x == ReferenceTypeId::HasEventSource as u32
+            || x == ReferenceTypeId::HasNotifier as u32
+    )
+}
+
 fn browse_hierarchical(node_id: NodeId) -> BrowseDescription {
     BrowseDescription {
         node_id,
@@ -457,13 +479,20 @@ async fn has_children_batch(session: &Session, ids: &[NodeId]) -> Vec<bool> {
             reference_type_id: NodeId::new(0, ReferenceTypeId::HierarchicalReferences as u32),
             include_subtypes: true,
             node_class_mask: NodeClassMask::all().bits(),
-            result_mask: 0,
+            result_mask: BrowseDescriptionResultMask::RESULT_MASK_REFERENCE_TYPE.bits(),
         })
         .collect();
-    match session.browse(&descs, 1, None).await {
+    match session.browse(&descs, 0, None).await {
         Ok(results) => results
             .into_iter()
-            .map(|r| r.references.map(|v| !v.is_empty()).unwrap_or(false))
+            .map(|r| {
+                r.references
+                    .map(|refs| {
+                        refs.iter()
+                            .any(|rd| !is_excluded_tree_reference(&rd.reference_type_id))
+                    })
+                    .unwrap_or(false)
+            })
             .collect(),
         Err(_) => vec![false; ids.len()],
     }

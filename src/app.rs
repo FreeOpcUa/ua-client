@@ -23,6 +23,7 @@ const STORAGE_AUTH_MODE: &str = "auth_mode";
 const STORAGE_AUTH_USERNAME: &str = "auth_username";
 const STORAGE_AUTH_CERT_PATH: &str = "auth_cert_path";
 const STORAGE_AUTH_KEY_PATH: &str = "auth_key_path";
+const STORAGE_LAST_SELECTIONS: &str = "last_selection_chains";
 
 impl UaApp {
     pub fn new(
@@ -56,6 +57,21 @@ impl UaApp {
             if let Some(s2) = eframe::get_value::<String>(s, STORAGE_AUTH_KEY_PATH) {
                 model.auth_key_path = s2;
             }
+            if let Some(stored) = eframe::get_value::<std::collections::HashMap<String, Vec<String>>>(
+                s,
+                STORAGE_LAST_SELECTIONS,
+            ) {
+                use std::str::FromStr;
+                for (url, ids) in stored {
+                    let chain: Vec<opcua::types::NodeId> = ids
+                        .iter()
+                        .filter_map(|s| opcua::types::NodeId::from_str(s).ok())
+                        .collect();
+                    if !chain.is_empty() {
+                        model.last_selection_chains.insert(url, chain);
+                    }
+                }
+            }
         }
         Self {
             model,
@@ -79,8 +95,24 @@ impl UaApp {
                 self.model.connection = ConnectionState::Connected;
                 self.model.record_successful_connection();
                 tracing::info!("connected to {}", self.model.endpoint_url);
-                let root = self.model.root_node.clone();
-                self.ensure_expanded(ctx, root);
+                let saved = self
+                    .model
+                    .last_selection_chains
+                    .get(&self.model.endpoint_url)
+                    .cloned();
+                match saved {
+                    Some(chain) if !chain.is_empty() => {
+                        tracing::info!(
+                            "restoring previous selection ({} ancestors)",
+                            chain.len()
+                        );
+                        self.spawn_restore_selection(ctx, chain);
+                    }
+                    _ => {
+                        let root = self.model.root_node.clone();
+                        self.ensure_expanded(ctx, root);
+                    }
+                }
             }
             UiUpdate::ConnectFinished(Err(e)) => {
                 self.model.connection = ConnectionState::Disconnected;
@@ -117,6 +149,16 @@ impl UaApp {
                         Ok(rs) => self.model.references = Some(rs),
                         Err(e) => tracing::error!("browse refs {node} failed: {e}"),
                     }
+                }
+            }
+            UiUpdate::SelectionChainResolved { url, chain } => {
+                self.model.last_selection_chains.insert(url, chain);
+            }
+            UiUpdate::RestoreSelection(node) => {
+                self.model.selected = Some(node.clone());
+                self.spawn_node_summary(ctx, node.clone());
+                if self.model.active_tab == DetailTab::References {
+                    self.spawn_browse_references(ctx, node);
                 }
             }
             UiUpdate::PathReady { node, path } => match path {
@@ -244,8 +286,54 @@ impl UaApp {
         self.model.references = None;
         self.spawn_node_summary(ctx, node.clone());
         if self.model.active_tab == DetailTab::References {
-            self.spawn_browse_references(ctx, node);
+            self.spawn_browse_references(ctx, node.clone());
         }
+        self.spawn_resolve_chain(ctx, node);
+    }
+
+    fn spawn_resolve_chain(&self, ctx: &egui::Context, node: NodeId) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let url = self.model.endpoint_url.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            match client.ancestor_chain(&node).await {
+                Ok(chain) => {
+                    let _ = tx.send(UiUpdate::SelectionChainResolved { url, chain });
+                    ctx.request_repaint();
+                }
+                Err(e) => tracing::debug!("ancestor_chain for {node} failed: {e}"),
+            }
+        });
+    }
+
+    fn spawn_restore_selection(&self, ctx: &egui::Context, chain: Vec<NodeId>) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            if chain.is_empty() {
+                return;
+            }
+            let target = chain.last().cloned().unwrap();
+            for parent in chain.iter().take(chain.len() - 1) {
+                match client.browse_children(parent).await {
+                    Ok(children) => {
+                        let _ = tx.send(UiUpdate::ChildrenLoaded {
+                            parent: parent.clone(),
+                            children: Ok(children),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("restore: browse_children({parent}) failed: {e}");
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(UiUpdate::RestoreSelection(target));
+            ctx.request_repaint();
+        });
     }
 
     fn spawn_connect(&mut self, ctx: &egui::Context) {
@@ -407,5 +495,12 @@ impl eframe::App for UaApp {
         eframe::set_value(storage, STORAGE_AUTH_USERNAME, &self.model.auth_username);
         eframe::set_value(storage, STORAGE_AUTH_CERT_PATH, &self.model.auth_cert_path);
         eframe::set_value(storage, STORAGE_AUTH_KEY_PATH, &self.model.auth_key_path);
+        let chains: std::collections::HashMap<String, Vec<String>> = self
+            .model
+            .last_selection_chains
+            .iter()
+            .map(|(url, chain)| (url.clone(), chain.iter().map(|n| n.to_string()).collect()))
+            .collect();
+        eframe::set_value(storage, STORAGE_LAST_SELECTIONS, &chains);
     }
 }

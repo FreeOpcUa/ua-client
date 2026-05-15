@@ -149,6 +149,31 @@ impl UaClient {
         })
     }
 
+    /// Return the chain of ancestor NodeIds for `node_id`, from the topmost
+    /// reachable ancestor (typically Root) down to and including `node_id` itself.
+    pub async fn ancestor_chain(&self, node_id: &NodeId) -> Result<Vec<NodeId>> {
+        const MAX_DEPTH: usize = 64;
+        let session = self.session().await?;
+        let root = NodeId::new(0, opcua::types::ObjectId::RootFolder as u32);
+
+        let mut chain = vec![node_id.clone()];
+        let mut current = node_id.clone();
+        for _ in 0..MAX_DEPTH {
+            if current == root {
+                break;
+            }
+            match read_inverse_parent(&session, &current).await? {
+                Some(parent) => {
+                    chain.push(parent.clone());
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        chain.reverse();
+        Ok(chain)
+    }
+
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
         let client = build_client()?;
         let descriptions = client

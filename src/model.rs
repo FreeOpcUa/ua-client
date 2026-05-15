@@ -59,6 +59,7 @@ pub struct AppModel {
     pub auth_password: String,
     pub auth_cert_path: String,
     pub auth_key_path: String,
+    pub last_selection_chains: HashMap<String, Vec<NodeId>>,
 }
 
 impl Default for AppModel {
@@ -84,6 +85,7 @@ impl Default for AppModel {
             auth_password: String::new(),
             auth_cert_path: String::new(),
             auth_key_path: String::new(),
+            last_selection_chains: HashMap::new(),
         }
     }
 }

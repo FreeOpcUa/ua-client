@@ -13,7 +13,8 @@ categories = ["gui", "network-programming"]
 [dependencies]
 anyhow = "1"
 async-opcua = { version = "0.18", default-features = false, features = [
-  "client"
+  "client",
+  "json"
 ] }
 eframe = { version = "0.30", default-features = false, features = [
   "default_fonts",
@@ -25,6 +26,7 @@ eframe = { version = "0.30", default-features = false, features = [
 egui = "0.30"
 egui_extras = "0.30"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = [
   "macros",
   "rt-multi-thread",

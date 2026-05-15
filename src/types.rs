@@ -16,7 +16,23 @@ pub struct NodeSummary {
     pub display_name: String,
     pub node_class: NodeClass,
     pub description: Option<String>,
-    pub value: Option<String>,
+    pub value: Option<NodeValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeValue {
+    pub data: ValueTree,
+    pub status: Option<String>,
+    pub source_timestamp: Option<String>,
+    pub server_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueTree {
+    Null,
+    Leaf(String),
+    Array(Vec<ValueTree>),
+    Object(Vec<(String, ValueTree)>),
 }
 
 #[derive(Debug, Clone)]

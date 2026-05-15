@@ -2,19 +2,23 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use opcua::client::custom_types::DataTypeTreeBuilder;
 use opcua::client::{ClientBuilder, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
+use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
+use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
-    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
+    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, DataValue,
     EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
-    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn,
+    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, TypeLoader,
     UserTokenPolicy, UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::types::{
-    AuthMode, AuthSpec, EndpointInfo, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+    AuthMode, AuthSpec, EndpointInfo, NodeSummary, NodeValue, ReferenceRow, SecurityMode,
+    TreeChild, ValueTree,
 };
 
 struct Connected {
@@ -112,6 +116,10 @@ impl UaClient {
         if !connected {
             handle.abort();
             return Err(anyhow!("failed to establish connection"));
+        }
+
+        if let Err(e) = register_dynamic_type_loader(&session).await {
+            tracing::warn!("dynamic type loader setup failed: {e}");
         }
 
         *guard = State::Connected(Connected {
@@ -285,7 +293,10 @@ impl UaClient {
                 }
                 _ => None,
             });
-        let value = values.get(4).and_then(value_attribute_to_string);
+        let value = values
+            .get(4)
+            .map(|dv| value_attribute_to_node_value(&session, dv))
+            .and_then(|v| v);
 
         Ok(NodeSummary {
             node_id: node_id.clone(),
@@ -567,65 +578,117 @@ fn endpoint_description_to_info(ep: EndpointDescription) -> EndpointInfo {
     }
 }
 
-const MAX_VALUE_LEN: usize = 500;
+fn value_attribute_to_node_value(session: &Session, dv: &DataValue) -> Option<NodeValue> {
+    let data = match dv.value.as_ref() {
+        Some(v) => variant_to_tree(session, v),
+        None => ValueTree::Null,
+    };
+    let status = dv.status.map(|s| s.to_string());
+    let source_timestamp = dv.source_timestamp.as_ref().map(|t| t.to_string());
+    let server_timestamp = dv.server_timestamp.as_ref().map(|t| t.to_string());
+    if matches!(data, ValueTree::Null) && status.is_none() && source_timestamp.is_none() && server_timestamp.is_none()
+    {
+        return None;
+    }
+    Some(NodeValue {
+        data,
+        status,
+        source_timestamp,
+        server_timestamp,
+    })
+}
 
-fn value_attribute_to_string(dv: &opcua::types::DataValue) -> Option<String> {
-    if let Some(status) = dv.status {
-        if !status.is_good() {
-            return None;
+fn variant_to_tree(session: &Session, v: &Variant) -> ValueTree {
+    match v {
+        Variant::Empty => ValueTree::Null,
+        Variant::Boolean(b) => ValueTree::Leaf(b.to_string()),
+        Variant::SByte(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Byte(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Int16(n) => ValueTree::Leaf(n.to_string()),
+        Variant::UInt16(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Int32(n) => ValueTree::Leaf(n.to_string()),
+        Variant::UInt32(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Int64(n) => ValueTree::Leaf(n.to_string()),
+        Variant::UInt64(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Float(n) => ValueTree::Leaf(n.to_string()),
+        Variant::Double(n) => ValueTree::Leaf(n.to_string()),
+        Variant::String(s) => ValueTree::Leaf(s.to_string()),
+        Variant::DateTime(d) => ValueTree::Leaf(d.to_string()),
+        Variant::Guid(g) => ValueTree::Leaf(format!("{g:?}")),
+        Variant::StatusCode(s) => ValueTree::Leaf(s.to_string()),
+        Variant::ByteString(b) => match b.value.as_ref() {
+            Some(bytes) => ValueTree::Leaf(format!("<{} bytes>", bytes.len())),
+            None => ValueTree::Null,
+        },
+        Variant::XmlElement(_) => ValueTree::Leaf("XmlElement(…)".to_string()),
+        Variant::QualifiedName(q) => ValueTree::Leaf(q.name.to_string()),
+        Variant::LocalizedText(t) => ValueTree::Leaf(t.text.to_string()),
+        Variant::NodeId(n) => ValueTree::Leaf(n.to_string()),
+        Variant::ExpandedNodeId(n) => ValueTree::Leaf(format!("{n}")),
+        Variant::ExtensionObject(obj) => extension_object_to_tree(session, obj),
+        Variant::Variant(inner) => variant_to_tree(session, inner),
+        Variant::DataValue(_) => ValueTree::Leaf("DataValue(…)".to_string()),
+        Variant::DiagnosticInfo(_) => ValueTree::Leaf("DiagnosticInfo(…)".to_string()),
+        Variant::Array(arr) => {
+            ValueTree::Array(arr.values.iter().map(|i| variant_to_tree(session, i)).collect())
         }
     }
-    let variant = dv.value.as_ref()?;
-    let mut s = format_variant(variant);
-    if s.len() > MAX_VALUE_LEN {
-        s.truncate(MAX_VALUE_LEN);
-        s.push('…');
-    }
-    Some(s)
 }
 
-fn format_variant(v: &Variant) -> String {
+fn extension_object_to_tree(session: &Session, obj: &opcua::types::ExtensionObject) -> ValueTree {
+    if obj.inner_as::<DynamicStructure>().is_none() {
+        let label = obj
+            .type_name()
+            .map(|n| format!("ExtensionObject ({n})"))
+            .unwrap_or_else(|| "ExtensionObject".to_string());
+        return ValueTree::Leaf(label);
+    }
+    match dynamic_struct_to_tree(session, obj) {
+        Some(tree) => tree,
+        None => ValueTree::Leaf("ExtensionObject (decode failed)".to_string()),
+    }
+}
+
+fn dynamic_struct_to_tree(
+    session: &Session,
+    obj: &opcua::types::ExtensionObject,
+) -> Option<ValueTree> {
+    let ds = obj.inner_as::<DynamicStructure>()?;
+    let ctx_owned = session.context();
+    let ctx_guard = ctx_owned.read();
+    let ctx = ctx_guard.context();
+    let mut buf = Vec::new();
+    {
+        let writer_ref: &mut dyn std::io::Write = &mut buf;
+        let mut writer = JsonStreamWriter::new(writer_ref);
+        ds.encode(&mut writer, &ctx).ok()?;
+        writer.finish_document().ok()?;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    Some(json_to_tree(&json))
+}
+
+fn json_to_tree(v: &serde_json::Value) -> ValueTree {
     match v {
-        Variant::Empty => "(empty)".to_string(),
-        Variant::Boolean(b) => b.to_string(),
-        Variant::SByte(n) => n.to_string(),
-        Variant::Byte(n) => n.to_string(),
-        Variant::Int16(n) => n.to_string(),
-        Variant::UInt16(n) => n.to_string(),
-        Variant::Int32(n) => n.to_string(),
-        Variant::UInt32(n) => n.to_string(),
-        Variant::Int64(n) => n.to_string(),
-        Variant::UInt64(n) => n.to_string(),
-        Variant::Float(n) => n.to_string(),
-        Variant::Double(n) => n.to_string(),
-        Variant::String(s) => s.to_string(),
-        Variant::DateTime(d) => format!("{d:?}"),
-        Variant::Guid(g) => format!("{g:?}"),
-        Variant::StatusCode(s) => format!("{s}"),
-        Variant::ByteString(b) => match b.value.as_ref() {
-            Some(bytes) => format!("ByteString({} bytes)", bytes.len()),
-            None => "ByteString(null)".to_string(),
-        },
-        Variant::XmlElement(_) => "XmlElement(…)".to_string(),
-        Variant::QualifiedName(q) => q.name.to_string(),
-        Variant::LocalizedText(t) => t.text.to_string(),
-        Variant::NodeId(n) => n.to_string(),
-        Variant::ExpandedNodeId(n) => format!("{n:?}"),
-        Variant::ExtensionObject(_) => "ExtensionObject(…)".to_string(),
-        Variant::Variant(inner) => format_variant(inner),
-        Variant::DataValue(_) => "DataValue(…)".to_string(),
-        Variant::DiagnosticInfo(_) => "DiagnosticInfo(…)".to_string(),
-        Variant::Array(arr) => format_array(&arr.values),
+        serde_json::Value::Null => ValueTree::Null,
+        serde_json::Value::Bool(b) => ValueTree::Leaf(b.to_string()),
+        serde_json::Value::Number(n) => ValueTree::Leaf(n.to_string()),
+        serde_json::Value::String(s) => ValueTree::Leaf(s.clone()),
+        serde_json::Value::Array(arr) => ValueTree::Array(arr.iter().map(json_to_tree).collect()),
+        serde_json::Value::Object(map) => ValueTree::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), json_to_tree(v)))
+                .collect(),
+        ),
     }
 }
 
-fn format_array(values: &[Variant]) -> String {
-    let n = values.len();
-    let take = n.min(8);
-    let items: Vec<String> = values.iter().take(take).map(format_variant).collect();
-    if n > take {
-        format!("[{}, … ({n} items)]", items.join(", "))
-    } else {
-        format!("[{}]", items.join(", "))
-    }
+async fn register_dynamic_type_loader(session: &Session) -> Result<()> {
+    let type_tree = DataTypeTreeBuilder::new(|_| true)
+        .build(session)
+        .await
+        .map_err(|e| anyhow!("DataTypeTreeBuilder failed: {e}"))?;
+    let loader: Arc<dyn TypeLoader> = Arc::new(DynamicTypeLoader::new(Arc::new(type_tree)));
+    session.add_type_loader(loader);
+    Ok(())
 }

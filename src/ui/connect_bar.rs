@@ -2,17 +2,29 @@ use crate::messages::UiAction;
 use crate::model::{AppModel, ConnectionState};
 
 pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
-    ui.horizontal(|ui| {
-        ui.label("URI:");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            draw_status(ui, model);
-            draw_disconnect(ui, model, actions);
-            draw_connect(ui, model, actions);
-            draw_security_info(ui, model, actions);
-            draw_history_dropdown(ui, model, actions);
-            draw_url(ui, model, actions);
+    let visuals = &ui.style().visuals;
+    let stroke_color = if visuals.dark_mode {
+        egui::Color32::from_gray(110)
+    } else {
+        egui::Color32::from_gray(140)
+    };
+    egui::Frame::default()
+        .stroke(egui::Stroke::new(1.0, stroke_color))
+        .rounding(6.0)
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.label("URI:");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    draw_status(ui, model);
+                    draw_disconnect(ui, model, actions);
+                    draw_connect(ui, model, actions);
+                    draw_security_info(ui, model, actions);
+                    draw_history_dropdown(ui, model, actions);
+                    draw_url(ui, model, actions);
+                });
+            });
         });
-    });
 }
 
 fn draw_url(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {

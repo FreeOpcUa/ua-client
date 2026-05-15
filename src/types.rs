@@ -12,19 +12,13 @@ pub struct TreeChild {
 #[derive(Debug, Clone)]
 pub struct NodeSummary {
     pub node_id: NodeId,
-    pub browse_name: String,
-    pub display_name: String,
-    pub node_class: NodeClass,
-    pub description: Option<String>,
-    pub value: Option<NodeValue>,
+    pub attributes: Vec<NodeAttribute>,
 }
 
 #[derive(Debug, Clone)]
-pub struct NodeValue {
-    pub data: ValueTree,
-    pub status: Option<String>,
-    pub source_timestamp: Option<String>,
-    pub server_timestamp: Option<String>,
+pub struct NodeAttribute {
+    pub name: String,
+    pub value: ValueTree,
 }
 
 #[derive(Debug, Clone)]

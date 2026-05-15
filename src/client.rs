@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::types::{
-    AuthMode, AuthSpec, EndpointInfo, NodeSummary, NodeValue, ReferenceRow, SecurityMode,
+    AuthMode, AuthSpec, EndpointInfo, NodeAttribute, NodeSummary, ReferenceRow, SecurityMode,
     TreeChild, ValueTree,
 };
 
@@ -246,72 +246,52 @@ impl UaClient {
 
     pub async fn read_node_summary(&self, node_id: &NodeId) -> Result<NodeSummary> {
         let session = self.session().await?;
-        let attrs = [
-            AttributeId::NodeClass,
-            AttributeId::BrowseName,
-            AttributeId::DisplayName,
-            AttributeId::Description,
-            AttributeId::Value,
-        ];
-        let to_read: Vec<ReadValueId> = attrs
+        let to_read: Vec<ReadValueId> = ALL_ATTRIBUTES
             .iter()
-            .map(|a| ReadValueId::new(node_id.clone(), *a))
+            .map(|(a, _)| ReadValueId::new(node_id.clone(), *a))
             .collect();
         let values = session
-            .read(&to_read, TimestampsToReturn::Neither, 0.0)
+            .read(&to_read, TimestampsToReturn::Both, 0.0)
             .await
             .map_err(|s| anyhow!("read failed: {s}"))?;
 
-        let node_class = values
-            .first()
-            .and_then(|v| v.value.as_ref())
-            .and_then(|v| match v {
-                Variant::Int32(i) => NodeClass::try_from(*i).ok(),
-                _ => None,
-            })
-            .unwrap_or(NodeClass::Unspecified);
-        let browse_name = values
-            .get(1)
-            .and_then(|v| v.value.as_ref())
-            .and_then(|v| match v {
-                Variant::QualifiedName(q) => Some(q.name.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let display_name = values
-            .get(2)
-            .and_then(|v| v.value.as_ref())
-            .and_then(|v| match v {
-                Variant::LocalizedText(t) => Some(t.text.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let description = values
-            .get(3)
-            .and_then(|v| v.value.as_ref())
-            .and_then(|v| match v {
-                Variant::LocalizedText(t) => {
-                    let s = t.text.to_string();
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s)
-                    }
-                }
-                _ => None,
+        let mut attributes: Vec<NodeAttribute> = Vec::new();
+        for ((attr_id, name), dv) in ALL_ATTRIBUTES.iter().zip(values.iter()) {
+            if !attribute_status_ok(dv) {
+                continue;
+            }
+            let Some(v) = dv.value.as_ref() else { continue };
+            let tree = format_attribute_value(*attr_id, v, &session);
+            attributes.push(NodeAttribute {
+                name: name.to_string(),
+                value: tree,
             });
-        let value = values
-            .get(4)
-            .map(|dv| value_attribute_to_node_value(&session, dv))
-            .and_then(|v| v);
+            if matches!(attr_id, AttributeId::Value) {
+                if let Some(s) = dv.status.map(|s| s.to_string()) {
+                    attributes.push(NodeAttribute {
+                        name: "StatusCode".to_string(),
+                        value: ValueTree::Leaf(s),
+                    });
+                }
+                if let Some(t) = dv.source_timestamp.as_ref() {
+                    attributes.push(NodeAttribute {
+                        name: "SourceTimestamp".to_string(),
+                        value: ValueTree::Leaf(t.to_string()),
+                    });
+                }
+                if let Some(t) = dv.server_timestamp.as_ref() {
+                    attributes.push(NodeAttribute {
+                        name: "ServerTimestamp".to_string(),
+                        value: ValueTree::Leaf(t.to_string()),
+                    });
+                }
+            }
+        }
+        attributes.sort_by(|a, b| a.name.cmp(&b.name));
 
         Ok(NodeSummary {
             node_id: node_id.clone(),
-            browse_name,
-            display_name,
-            node_class,
-            description,
-            value,
+            attributes,
         })
     }
 
@@ -607,24 +587,52 @@ fn endpoint_description_to_info(ep: EndpointDescription) -> EndpointInfo {
     }
 }
 
-fn value_attribute_to_node_value(session: &Session, dv: &DataValue) -> Option<NodeValue> {
-    let data = match dv.value.as_ref() {
-        Some(v) => variant_to_tree(session, v),
-        None => ValueTree::Null,
-    };
-    let status = dv.status.map(|s| s.to_string());
-    let source_timestamp = dv.source_timestamp.as_ref().map(|t| t.to_string());
-    let server_timestamp = dv.server_timestamp.as_ref().map(|t| t.to_string());
-    if matches!(data, ValueTree::Null) && status.is_none() && source_timestamp.is_none() && server_timestamp.is_none()
-    {
-        return None;
+const ALL_ATTRIBUTES: &[(AttributeId, &str)] = &[
+    (AttributeId::AccessLevel, "AccessLevel"),
+    (AttributeId::AccessLevelEx, "AccessLevelEx"),
+    (AttributeId::AccessRestrictions, "AccessRestrictions"),
+    (AttributeId::ArrayDimensions, "ArrayDimensions"),
+    (AttributeId::BrowseName, "BrowseName"),
+    (AttributeId::ContainsNoLoops, "ContainsNoLoops"),
+    (AttributeId::DataType, "DataType"),
+    (AttributeId::DataTypeDefinition, "DataTypeDefinition"),
+    (AttributeId::Description, "Description"),
+    (AttributeId::DisplayName, "DisplayName"),
+    (AttributeId::EventNotifier, "EventNotifier"),
+    (AttributeId::Executable, "Executable"),
+    (AttributeId::Historizing, "Historizing"),
+    (AttributeId::InverseName, "InverseName"),
+    (AttributeId::IsAbstract, "IsAbstract"),
+    (AttributeId::MinimumSamplingInterval, "MinimumSamplingInterval"),
+    (AttributeId::NodeClass, "NodeClass"),
+    (AttributeId::NodeId, "NodeId"),
+    (AttributeId::RolePermissions, "RolePermissions"),
+    (AttributeId::Symmetric, "Symmetric"),
+    (AttributeId::UserAccessLevel, "UserAccessLevel"),
+    (AttributeId::UserExecutable, "UserExecutable"),
+    (AttributeId::UserRolePermissions, "UserRolePermissions"),
+    (AttributeId::UserWriteMask, "UserWriteMask"),
+    (AttributeId::Value, "Value"),
+    (AttributeId::ValueRank, "ValueRank"),
+    (AttributeId::WriteMask, "WriteMask"),
+];
+
+fn attribute_status_ok(dv: &DataValue) -> bool {
+    match dv.status {
+        None => dv.value.is_some(),
+        Some(s) => s.is_good(),
     }
-    Some(NodeValue {
-        data,
-        status,
-        source_timestamp,
-        server_timestamp,
-    })
+}
+
+fn format_attribute_value(attr: AttributeId, v: &Variant, session: &Session) -> ValueTree {
+    if matches!(attr, AttributeId::NodeClass) {
+        if let Variant::Int32(i) = v {
+            if let Ok(nc) = NodeClass::try_from(*i) {
+                return ValueTree::Leaf(format!("{nc:?}"));
+            }
+        }
+    }
+    variant_to_tree(session, v)
 }
 
 fn variant_to_tree(session: &Session, v: &Variant) -> ValueTree {

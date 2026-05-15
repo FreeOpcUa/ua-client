@@ -30,9 +30,11 @@ fn draw_root(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
             actions.push(UiAction::NodeToggleExpand(root_id.clone()));
         }
         let label = format!("Root  ({root_id})");
-        if ui.selectable_label(selected, label).clicked() {
+        let resp = ui.selectable_label(selected, label);
+        if resp.clicked() {
             actions.push(UiAction::NodeSelected(root_id.clone()));
         }
+        attach_node_context_menu(resp, &root_id);
         if loading {
             ui.spinner();
         }
@@ -77,9 +79,11 @@ fn draw_child(
             child.display_name.clone()
         };
         let label = format!("{} [{:?}]", label_text, child.node_class);
-        if ui.selectable_label(selected, label).clicked() {
+        let resp = ui.selectable_label(selected, label);
+        if resp.clicked() {
             actions.push(UiAction::NodeSelected(id.clone()));
         }
+        attach_node_context_menu(resp, id);
         if loading {
             ui.spinner();
         }
@@ -99,4 +103,15 @@ fn draw_child(
 
 fn node_id_key(id: &NodeId) -> String {
     id.to_string()
+}
+
+pub(super) fn attach_node_context_menu(resp: egui::Response, id: &NodeId) {
+    let id_string = id.to_string();
+    resp.context_menu(|ui| {
+        if ui.button("Copy NodeId").clicked() {
+            ui.output_mut(|o| o.copied_text = id_string.clone());
+            tracing::info!("copied NodeId: {id_string}");
+            ui.close_menu();
+        }
+    });
 }

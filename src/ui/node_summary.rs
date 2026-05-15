@@ -13,7 +13,17 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui) {
         .num_columns(2)
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
-            row(ui, "NodeId", &summary.node_id.to_string());
+            let node_id_str = summary.node_id.to_string();
+            ui.label(egui::RichText::new("NodeId").strong());
+            let r = ui.add(egui::Label::new(&node_id_str).sense(egui::Sense::click()));
+            r.context_menu(|ui| {
+                if ui.button("Copy NodeId").clicked() {
+                    ui.output_mut(|o| o.copied_text = node_id_str.clone());
+                    tracing::info!("copied NodeId: {node_id_str}");
+                    ui.close_menu();
+                }
+            });
+            ui.end_row();
             row(ui, "BrowseName", &summary.browse_name);
             row(ui, "DisplayName", &summary.display_name);
             row(ui, "NodeClass", &format!("{:?}", summary.node_class));

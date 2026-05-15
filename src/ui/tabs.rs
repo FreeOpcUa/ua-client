@@ -67,6 +67,7 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui) {
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            .sense(egui::Sense::click())
             .column(Column::auto().at_least(30.0))
             .column(Column::auto().at_least(120.0))
             .column(Column::auto().at_least(120.0))
@@ -90,6 +91,14 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui) {
                         row.col(|ui| { ui.label(&r.target_browse_name); });
                         row.col(|ui| { ui.label(format!("{:?}", r.target_node_class)); });
                         row.col(|ui| { ui.label(r.target_node_id.to_string()); });
+                        let id_string = r.target_node_id.to_string();
+                        row.response().context_menu(|ui| {
+                            if ui.button("Copy NodeId").clicked() {
+                                ui.output_mut(|o| o.copied_text = id_string.clone());
+                                tracing::info!("copied NodeId: {id_string}");
+                                ui.close_menu();
+                            }
+                        });
                     });
                 }
             });

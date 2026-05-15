@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use opcua::types::{NodeId, ObjectId};
 
-use crate::types::{EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
 
 const MAX_LOG_LINES: usize = 1000;
 const MAX_HISTORY: usize = 20;
@@ -54,6 +54,11 @@ pub struct AppModel {
     pub endpoints_loading: bool,
     pub discovered_endpoints: Option<Vec<EndpointInfo>>,
     pub endpoints_dialog_open: bool,
+    pub auth_mode: AuthMode,
+    pub auth_username: String,
+    pub auth_password: String,
+    pub auth_cert_path: String,
+    pub auth_key_path: String,
 }
 
 impl Default for AppModel {
@@ -74,6 +79,11 @@ impl Default for AppModel {
             endpoints_loading: false,
             discovered_endpoints: None,
             endpoints_dialog_open: false,
+            auth_mode: AuthMode::Anonymous,
+            auth_username: String::new(),
+            auth_password: String::new(),
+            auth_cert_path: String::new(),
+            auth_key_path: String::new(),
         }
     }
 }

@@ -8,7 +8,7 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
             draw_status(ui, model);
             draw_disconnect(ui, model, actions);
             draw_connect(ui, model, actions);
-            draw_endpoint_button(ui, model, actions);
+            draw_security_info(ui, model, actions);
             draw_history_dropdown(ui, model, actions);
             draw_url(ui, model, actions);
         });
@@ -20,15 +20,14 @@ fn draw_url(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     let mut url = model.endpoint_url.clone();
     let resp = ui.add_enabled(
         editable,
-        egui::TextEdit::singleline(&mut url).desired_width(ui.available_width()),
+        egui::TextEdit::singleline(&mut url)
+            .desired_width(ui.available_width())
+            .margin(egui::vec2(8.0, 6.0)),
     );
     if resp.changed() {
         actions.push(UiAction::EndpointEdited(url));
     }
-    if editable
-        && resp.lost_focus()
-        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-    {
+    if editable && resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         actions.push(UiAction::ConnectClicked);
     }
 }
@@ -57,17 +56,28 @@ fn draw_history_dropdown(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<
     );
 }
 
-fn draw_endpoint_button(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+fn draw_security_info(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     let editable = matches!(model.connection, ConnectionState::Disconnected);
-    let label = match model.selected_endpoint.as_ref() {
-        Some(ep) => format!("🔒 {} / {}", ep.security_policy, ep.security_mode.label()),
-        None => "🔓 Security: None".to_string(),
+    let (text, color) = match model.selected_endpoint.as_ref() {
+        Some(ep) => (
+            format!("🔒 {} / {}", ep.security_policy, ep.security_mode.label()),
+            egui::Color32::LIGHT_GREEN,
+        ),
+        None => ("🔓 no endpoint chosen".to_string(), egui::Color32::GRAY),
     };
-    if ui
-        .add_enabled(editable, egui::Button::new(label))
-        .on_hover_text("Discover server endpoints and pick a security policy / mode")
-        .clicked()
-    {
+    let widget = egui::Label::new(egui::RichText::new(text).color(color))
+        .sense(if editable {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        });
+    let resp = ui.add(widget);
+    let resp = if editable {
+        resp.on_hover_text("Click to change endpoint")
+    } else {
+        resp.on_hover_text("Selected endpoint (disconnect to change)")
+    };
+    if editable && resp.clicked() {
         actions.push(UiAction::OpenEndpointPicker);
     }
 }

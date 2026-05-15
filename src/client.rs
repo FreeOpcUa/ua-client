@@ -6,14 +6,16 @@ use opcua::client::{ClientBuilder, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
 use opcua::types::{
     AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
-    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask,
-    NodeId, ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode,
-    TimestampsToReturn, UserTokenPolicy, UserTokenType, Variant,
+    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
+    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn,
+    UserTokenPolicy, UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use crate::types::{EndpointInfo, NodeSummary, ReferenceRow, SecurityMode, TreeChild};
+use crate::types::{
+    AuthMode, AuthSpec, EndpointInfo, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+};
 
 struct Connected {
     session: Arc<Session>,
@@ -40,6 +42,7 @@ impl UaClient {
         &self,
         endpoint_url: &str,
         endpoint: Option<&EndpointInfo>,
+        auth: &AuthSpec,
     ) -> Result<()> {
         let mut guard = self.state.lock().await;
         if matches!(*guard, State::Connected(_)) {
@@ -62,6 +65,10 @@ impl UaClient {
             Some(ep) if !ep.endpoint_url.is_empty() => ep.endpoint_url.clone(),
             _ => endpoint_url.to_string(),
         };
+        let identity = build_identity_token(auth)?;
+        if mode != MessageSecurityMode::None {
+            log_client_cert_hint();
+        }
 
         let (session, event_loop) = client
             .connect_to_matching_endpoint(
@@ -71,13 +78,41 @@ impl UaClient {
                     mode,
                     UserTokenPolicy::anonymous(),
                 ),
-                IdentityToken::Anonymous,
+                identity,
             )
             .await
-            .map_err(|e| anyhow!("connect_to_matching_endpoint failed: {e}"))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                let lower = msg.to_lowercase();
+                if lower.contains("uriinvalid") {
+                    tracing::error!(
+                        "certificate URI mismatch (BadCertificateUriInvalid). \
+                         Delete the pki/ folder and reconnect to regenerate the cert with the current application URI \"{}\".",
+                        APPLICATION_URI
+                    );
+                } else if looks_like_cert_trust_error(&lower) {
+                    tracing::error!(
+                        "server rejected the client certificate. \
+                         Mark pki/own/cert.der as trusted in the server's PKI store and try again."
+                    );
+                }
+                anyhow!("connect_to_matching_endpoint failed: {e}")
+            })?;
 
-        let handle = event_loop.spawn();
-        session.wait_for_connection().await;
+        let mut handle = event_loop.spawn();
+        let session_for_wait = session.clone();
+        let connected = tokio::select! {
+            res = &mut handle => {
+                return Err(anyhow!(
+                    "session ended before connection was established: {res:?}"
+                ));
+            }
+            c = session_for_wait.wait_for_connection() => c,
+        };
+        if !connected {
+            handle.abort();
+            return Err(anyhow!("failed to establish connection"));
+        }
 
         *guard = State::Connected(Connected {
             session,
@@ -124,7 +159,9 @@ impl UaClient {
             .browse(&[desc], 0, None)
             .await
             .map_err(|s| anyhow!("browse failed: {s}"))?;
-        let result = results.pop().ok_or_else(|| anyhow!("empty browse result"))?;
+        let result = results
+            .pop()
+            .ok_or_else(|| anyhow!("empty browse result"))?;
         let refs = result.references.unwrap_or_default();
 
         let mut children = Vec::with_capacity(refs.len());
@@ -221,7 +258,9 @@ impl UaClient {
             .browse(&[desc], 0, None)
             .await
             .map_err(|s| anyhow!("browse failed: {s}"))?;
-        let result = results.pop().ok_or_else(|| anyhow!("empty browse result"))?;
+        let result = results
+            .pop()
+            .ok_or_else(|| anyhow!("empty browse result"))?;
         let refs = result.references.unwrap_or_default();
 
         let mut rows = Vec::with_capacity(refs.len());
@@ -309,14 +348,63 @@ fn expanded_to_local(eid: &ExpandedNodeId) -> NodeId {
     eid.node_id.clone()
 }
 
+fn log_client_cert_hint() {
+    let path = std::env::current_dir()
+        .unwrap_or_default()
+        .join("pki/own/cert.der");
+    tracing::info!(
+        "encrypted connection as \"{}\" ({}); client certificate at {}",
+        APPLICATION_NAME,
+        APPLICATION_URI,
+        path.display()
+    );
+    tracing::info!(
+        "if the server rejects the connection, copy that file into the server's trusted certs folder"
+    );
+}
+
+fn looks_like_cert_trust_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("badsecurity")
+        || lower.contains("badcertificate")
+        || lower.contains("certificatevalidation")
+        || lower.contains("untrusted")
+        || lower.contains("rejected")
+}
+
+fn build_identity_token(auth: &AuthSpec) -> Result<IdentityToken> {
+    match auth.mode {
+        AuthMode::Anonymous => Ok(IdentityToken::Anonymous),
+        AuthMode::UserName => {
+            if auth.username.is_empty() {
+                return Err(anyhow!("username required"));
+            }
+            Ok(IdentityToken::new_user_name(
+                auth.username.clone(),
+                auth.password.clone(),
+            ))
+        }
+        AuthMode::Certificate => {
+            if auth.cert_path.is_empty() || auth.key_path.is_empty() {
+                return Err(anyhow!("certificate and private-key paths required"));
+            }
+            IdentityToken::new_x509_path(&auth.cert_path, &auth.key_path)
+                .map_err(|e| anyhow!("failed to load certificate/key: {e}"))
+        }
+    }
+}
+
+const APPLICATION_NAME: &str = "Rust OPC UA Client from FreeOpcUa";
+const APPLICATION_URI: &str = "urn:FreeOpcUa:ua-client";
+
 fn build_client() -> Result<opcua::client::Client> {
     ClientBuilder::new()
-        .application_name("ua-client")
-        .application_uri("urn:ua-client")
-        .product_uri("urn:ua-client")
+        .application_name(APPLICATION_NAME)
+        .application_uri(APPLICATION_URI)
+        .product_uri(APPLICATION_URI)
         .trust_server_certs(true)
         .create_sample_keypair(true)
-        .session_retry_limit(3)
+        .session_retry_limit(0)
         .client()
         .map_err(|errs| anyhow!("failed to build OPC UA client: {errs:?}"))
 }
@@ -427,4 +515,3 @@ fn format_array(values: &[Variant]) -> String {
         format!("[{}]", items.join(", "))
     }
 }
-

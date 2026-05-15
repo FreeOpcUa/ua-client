@@ -33,9 +33,64 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "ua-client",
         options,
-        Box::new(move |cc| Ok(Box::new(UaApp::new(runtime, log_rx, cc.storage)))),
+        Box::new(move |cc| {
+            apply_high_contrast_visuals(&cc.egui_ctx);
+            Ok(Box::new(UaApp::new(runtime, log_rx, cc.storage)))
+        }),
     )
 }
+
+fn apply_high_contrast_visuals(ctx: &egui::Context) {
+    use egui::{FontFamily, FontId, TextStyle};
+
+    let mut style = (*ctx.style()).clone();
+    style.text_styles.insert(
+        TextStyle::Heading,
+        FontId::new(20.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Body,
+        FontId::new(15.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Button,
+        FontId::new(15.0, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Monospace,
+        FontId::new(14.0, FontFamily::Monospace),
+    );
+    style.text_styles.insert(
+        TextStyle::Small,
+        FontId::new(12.0, FontFamily::Proportional),
+    );
+
+    let dark_mode = style.visuals.dark_mode;
+    let mut visuals = if dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    let strong = if dark_mode {
+        egui::Color32::from_gray(240)
+    } else {
+        egui::Color32::from_gray(15)
+    };
+    let weak = if dark_mode {
+        egui::Color32::from_gray(190)
+    } else {
+        egui::Color32::from_gray(70)
+    };
+    visuals.override_text_color = Some(strong);
+    visuals.widgets.noninteractive.fg_stroke.color = weak;
+    visuals.widgets.inactive.fg_stroke.color = strong;
+    visuals.widgets.hovered.fg_stroke.color = strong;
+    visuals.widgets.active.fg_stroke.color = strong;
+    visuals.widgets.open.fg_stroke.color = strong;
+    style.visuals = visuals;
+    ctx.set_style(style);
+}
+
 
 fn init_tracing(tx: mpsc::UnboundedSender<crate::messages::UiUpdate>) {
     let filter = EnvFilter::try_from_default_env()

@@ -19,6 +19,10 @@ pub struct UaApp {
 
 const STORAGE_ENDPOINT_URL: &str = "endpoint_url";
 const STORAGE_ENDPOINT_HISTORY: &str = "endpoint_history";
+const STORAGE_AUTH_MODE: &str = "auth_mode";
+const STORAGE_AUTH_USERNAME: &str = "auth_username";
+const STORAGE_AUTH_CERT_PATH: &str = "auth_cert_path";
+const STORAGE_AUTH_KEY_PATH: &str = "auth_key_path";
 
 impl UaApp {
     pub fn new(
@@ -35,6 +39,22 @@ impl UaApp {
             }
             if let Some(hist) = eframe::get_value::<Vec<String>>(s, STORAGE_ENDPOINT_HISTORY) {
                 model.endpoint_history = hist;
+            }
+            if let Some(m) = eframe::get_value::<String>(s, STORAGE_AUTH_MODE) {
+                model.auth_mode = match m.as_str() {
+                    "UserName" => crate::types::AuthMode::UserName,
+                    "Certificate" => crate::types::AuthMode::Certificate,
+                    _ => crate::types::AuthMode::Anonymous,
+                };
+            }
+            if let Some(s) = eframe::get_value::<String>(s, STORAGE_AUTH_USERNAME) {
+                model.auth_username = s;
+            }
+            if let Some(s2) = eframe::get_value::<String>(s, STORAGE_AUTH_CERT_PATH) {
+                model.auth_cert_path = s2;
+            }
+            if let Some(s2) = eframe::get_value::<String>(s, STORAGE_AUTH_KEY_PATH) {
+                model.auth_key_path = s2;
             }
         }
         Self {
@@ -131,8 +151,15 @@ impl UaApp {
             }
             UiAction::ConnectClicked => {
                 if self.model.selected_endpoint.is_none() {
+                    tracing::info!("no endpoint selected; opening picker");
                     self.open_endpoint_picker(ctx);
                 } else {
+                    let ep = self.model.selected_endpoint.as_ref().unwrap();
+                    tracing::info!(
+                        "connecting with {} / {}",
+                        ep.security_policy,
+                        ep.security_mode.label()
+                    );
                     self.spawn_connect(ctx);
                 }
             }
@@ -160,15 +187,22 @@ impl UaApp {
             }
             UiAction::SelectEndpoint(ep) => {
                 self.model.selected_endpoint = Some(ep);
-                self.model.endpoints_dialog_open = false;
-            }
-            UiAction::SelectEndpointAndConnect(ep) => {
-                self.model.selected_endpoint = Some(ep);
-                self.model.endpoints_dialog_open = false;
-                self.spawn_connect(ctx);
             }
             UiAction::ClearSelectedEndpoint => {
                 self.model.selected_endpoint = None;
+            }
+            UiAction::SetAuthMode(mode) => self.model.auth_mode = mode,
+            UiAction::AuthUsernameEdited(s) => self.model.auth_username = s,
+            UiAction::AuthPasswordEdited(s) => self.model.auth_password = s,
+            UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,
+            UiAction::AuthKeyPathEdited(s) => self.model.auth_key_path = s,
+            UiAction::ConfirmConnect => {
+                if self.model.selected_endpoint.is_some() {
+                    self.model.endpoints_dialog_open = false;
+                    self.spawn_connect(ctx);
+                } else {
+                    tracing::warn!("ConfirmConnect with no endpoint selected");
+                }
             }
         }
     }
@@ -211,11 +245,18 @@ impl UaApp {
         let tx = self.update_tx.clone();
         let url = self.model.endpoint_url.clone();
         let endpoint = self.model.selected_endpoint.clone();
+        let auth = crate::types::AuthSpec {
+            mode: self.model.auth_mode,
+            username: self.model.auth_username.clone(),
+            password: self.model.auth_password.clone(),
+            cert_path: self.model.auth_cert_path.clone(),
+            key_path: self.model.auth_key_path.clone(),
+        };
         let ctx = ctx.clone();
         let _ = tx.send(UiUpdate::ConnectStarted);
         self.rt.spawn(async move {
             let r = client
-                .connect(&url, endpoint.as_ref())
+                .connect(&url, endpoint.as_ref(), &auth)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::ConnectFinished(r));
@@ -338,5 +379,14 @@ impl eframe::App for UaApp {
             STORAGE_ENDPOINT_HISTORY,
             &self.model.endpoint_history,
         );
+        let auth_mode_str = match self.model.auth_mode {
+            crate::types::AuthMode::Anonymous => "Anonymous",
+            crate::types::AuthMode::UserName => "UserName",
+            crate::types::AuthMode::Certificate => "Certificate",
+        };
+        eframe::set_value(storage, STORAGE_AUTH_MODE, &auth_mode_str.to_string());
+        eframe::set_value(storage, STORAGE_AUTH_USERNAME, &self.model.auth_username);
+        eframe::set_value(storage, STORAGE_AUTH_CERT_PATH, &self.model.auth_cert_path);
+        eframe::set_value(storage, STORAGE_AUTH_KEY_PATH, &self.model.auth_key_path);
     }
 }

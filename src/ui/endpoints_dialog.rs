@@ -1,17 +1,21 @@
 use crate::messages::UiAction;
 use crate::model::AppModel;
-use crate::types::{EndpointInfo, SecurityMode};
+use crate::types::{AuthMode, EndpointInfo, SecurityMode};
+
+const BOTTOM_RESERVED: f32 = 56.0;
 
 pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) {
     if !model.endpoints_dialog_open {
         return;
     }
     let mut open = true;
-    egui::Window::new("Pick a server endpoint")
+    egui::Window::new("Connect to OPC UA server")
         .open(&mut open)
         .resizable(true)
         .collapsible(false)
-        .default_size([780.0, 420.0])
+        .default_size([820.0, 560.0])
+        .min_width(560.0)
+        .min_height(360.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
             draw_contents(ui, model, actions);
@@ -22,8 +26,28 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
 }
 
 fn draw_contents(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    draw_header(ui, model, actions);
+    ui.separator();
+    draw_auth(ui, model, actions);
+    ui.separator();
+
+    let total_h = ui.available_height();
+    let table_h = (total_h - BOTTOM_RESERVED).max(80.0);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), table_h),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_height(table_h);
+            ui.set_max_height(table_h);
+            draw_endpoints_area(ui, model, actions);
+        },
+    );
+    ui.separator();
+    draw_bottom_bar(ui, model, actions);
+}
+
+fn draw_header(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(&model.endpoint_url).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add_enabled(!model.endpoints_loading, egui::Button::new("Refresh"))
@@ -36,15 +60,110 @@ fn draw_contents(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction
             }
         });
     });
-    ui.label(
-        egui::RichText::new(
-            "Click \"Connect\" on a row to use that endpoint, or \"Use\" to just select it.",
-        )
-        .small()
-        .weak(),
-    );
-    ui.separator();
+}
 
+fn draw_auth(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    let (anon_ok, user_ok, cert_ok) = match model.selected_endpoint.as_ref() {
+        Some(ep) => (
+            ep.supports_anonymous,
+            ep.supports_username,
+            ep.supports_certificate,
+        ),
+        None => (true, true, true),
+    };
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Authentication:").strong());
+        radio_button(ui, model, actions, AuthMode::Anonymous, "Anonymous", anon_ok);
+        radio_button(
+            ui,
+            model,
+            actions,
+            AuthMode::UserName,
+            "Username / Password",
+            user_ok,
+        );
+        radio_button(
+            ui,
+            model,
+            actions,
+            AuthMode::Certificate,
+            "X.509 Certificate",
+            cert_ok,
+        );
+    });
+
+    match model.auth_mode {
+        AuthMode::Anonymous => {}
+        AuthMode::UserName => draw_username_fields(ui, model, actions),
+        AuthMode::Certificate => draw_certificate_fields(ui, model, actions),
+    }
+}
+
+fn radio_button(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    actions: &mut Vec<UiAction>,
+    mode: AuthMode,
+    label: &str,
+    enabled: bool,
+) {
+    let selected = model.auth_mode == mode;
+    let r = ui.add_enabled(enabled, egui::RadioButton::new(selected, label));
+    if r.clicked() && !selected {
+        actions.push(UiAction::SetAuthMode(mode));
+    }
+}
+
+fn draw_username_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    ui.horizontal(|ui| {
+        ui.label("User:");
+        let mut u = model.auth_username.clone();
+        if ui
+            .add(egui::TextEdit::singleline(&mut u).desired_width(200.0))
+            .changed()
+        {
+            actions.push(UiAction::AuthUsernameEdited(u));
+        }
+        ui.label("Password:");
+        let mut p = model.auth_password.clone();
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut p)
+                    .password(true)
+                    .desired_width(200.0),
+            )
+            .changed()
+        {
+            actions.push(UiAction::AuthPasswordEdited(p));
+        }
+    });
+}
+
+fn draw_certificate_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    ui.horizontal(|ui| {
+        ui.label("Cert path:");
+        let mut p = model.auth_cert_path.clone();
+        if ui
+            .add(egui::TextEdit::singleline(&mut p).desired_width(ui.available_width() - 20.0))
+            .changed()
+        {
+            actions.push(UiAction::AuthCertPathEdited(p));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Key path: ");
+        let mut p = model.auth_key_path.clone();
+        if ui
+            .add(egui::TextEdit::singleline(&mut p).desired_width(ui.available_width() - 20.0))
+            .changed()
+        {
+            actions.push(UiAction::AuthKeyPathEdited(p));
+        }
+    });
+}
+
+fn draw_endpoints_area(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     if model.endpoints_loading {
         ui.horizontal(|ui| {
             ui.spinner();
@@ -76,16 +195,13 @@ fn draw_endpoints_table(
         TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
-            .column(Column::auto().at_least(80.0))
-            .column(Column::auto().at_least(60.0))
+            .sense(egui::Sense::click())
             .column(Column::auto().at_least(180.0))
             .column(Column::auto().at_least(140.0))
             .column(Column::auto().at_least(50.0))
             .column(Column::auto().at_least(140.0))
             .column(Column::remainder().at_least(200.0))
             .header(22.0, |mut header| {
-                header.col(|ui| { ui.strong(""); });
-                header.col(|ui| { ui.strong(""); });
                 header.col(|ui| { ui.strong("Security policy"); });
                 header.col(|ui| { ui.strong("Mode"); });
                 header.col(|ui| { ui.strong("Level"); });
@@ -95,27 +211,49 @@ fn draw_endpoints_table(
             .body(|mut body| {
                 for ep in eps {
                     let is_selected = selected_key.as_ref() == Some(&endpoint_key(ep));
-                    body.row(26.0, |mut row| {
-                        row.col(|ui| {
-                            if ui.button("Connect").on_hover_text("Select this endpoint and connect").clicked() {
-                                actions.push(UiAction::SelectEndpointAndConnect(ep.clone()));
-                            }
-                        });
-                        row.col(|ui| {
-                            let txt = if is_selected { "✔" } else { "Use" };
-                            if ui.button(txt).on_hover_text("Select without connecting").clicked() {
-                                actions.push(UiAction::SelectEndpoint(ep.clone()));
-                            }
-                        });
+                    body.row(24.0, |mut row| {
+                        row.set_selected(is_selected);
                         row.col(|ui| { ui.label(&ep.security_policy); });
                         row.col(|ui| { ui.label(ep.security_mode.label()); });
                         row.col(|ui| { ui.label(format!("{}", ep.security_level)); });
                         row.col(|ui| { ui.label(token_label(ep)); });
                         row.col(|ui| { ui.label(&ep.endpoint_url); });
+                        if row.response().clicked() && !is_selected {
+                            actions.push(UiAction::SelectEndpoint(ep.clone()));
+                        }
                     });
                 }
             });
     });
+}
+
+fn draw_bottom_bar(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    let ready = model.selected_endpoint.is_some() && auth_ready(model);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let btn = egui::Button::new(egui::RichText::new("Connect").strong())
+            .min_size(egui::vec2(140.0, 36.0));
+        if ui
+            .add_enabled(ready, btn)
+            .on_hover_text(if ready {
+                "Connect using the selected endpoint and authentication"
+            } else {
+                "Pick an endpoint (and fill credentials if needed)"
+            })
+            .clicked()
+        {
+            actions.push(UiAction::ConfirmConnect);
+        }
+    });
+}
+
+fn auth_ready(model: &AppModel) -> bool {
+    match model.auth_mode {
+        AuthMode::Anonymous => true,
+        AuthMode::UserName => !model.auth_username.is_empty(),
+        AuthMode::Certificate => {
+            !model.auth_cert_path.is_empty() && !model.auth_key_path.is_empty()
+        }
+    }
 }
 
 fn endpoint_key(ep: &EndpointInfo) -> (String, String, SecurityMode) {

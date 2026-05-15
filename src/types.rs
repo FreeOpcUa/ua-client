@@ -19,6 +19,23 @@ pub struct NodeSummary {
     pub value: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AuthSpec {
+    pub mode: AuthMode,
+    pub username: String,
+    pub password: String,
+    pub cert_path: String,
+    pub key_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthMode {
+    #[default]
+    Anonymous,
+    UserName,
+    Certificate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityMode {
     None,

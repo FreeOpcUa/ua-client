@@ -34,7 +34,7 @@ fn draw_root(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         if resp.clicked() {
             actions.push(UiAction::NodeSelected(root_id.clone()));
         }
-        attach_node_context_menu(resp, &root_id);
+        attach_node_context_menu(resp, &root_id, actions);
         if loading {
             ui.spinner();
         }
@@ -83,7 +83,7 @@ fn draw_child(
         if resp.clicked() {
             actions.push(UiAction::NodeSelected(id.clone()));
         }
-        attach_node_context_menu(resp, id);
+        attach_node_context_menu(resp, id, actions);
         if loading {
             ui.spinner();
         }
@@ -105,13 +105,26 @@ fn node_id_key(id: &NodeId) -> String {
     id.to_string()
 }
 
-pub(super) fn attach_node_context_menu(resp: egui::Response, id: &NodeId) {
+pub(super) fn attach_node_context_menu(
+    resp: egui::Response,
+    id: &NodeId,
+    actions: &mut Vec<UiAction>,
+) {
     let id_string = id.to_string();
+    let id_clone = id.clone();
+    let mut copy_path = false;
     resp.context_menu(|ui| {
         if ui.button("Copy NodeId").clicked() {
             ui.output_mut(|o| o.copied_text = id_string.clone());
             tracing::info!("copied NodeId: {id_string}");
             ui.close_menu();
         }
+        if ui.button("Copy Path").clicked() {
+            copy_path = true;
+            ui.close_menu();
+        }
     });
+    if copy_path {
+        actions.push(UiAction::CopyPath(id_clone));
+    }
 }

@@ -17,7 +17,7 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
     ui.separator();
 
     match model.active_tab {
-        DetailTab::References => draw_references(model, ui),
+        DetailTab::References => draw_references(model, ui, actions),
         DetailTab::Attributes => draw_todo(ui, "Attributes tab — coming next."),
         DetailTab::Events => draw_todo(ui, "Events tab — coming next."),
         DetailTab::DataChanges => draw_todo(ui, "Data Changes tab — coming next."),
@@ -41,7 +41,7 @@ fn draw_todo(ui: &mut egui::Ui, msg: &str) {
     ui.label(egui::RichText::new(msg).italics().weak());
 }
 
-fn draw_references(model: &AppModel, ui: &mut egui::Ui) {
+fn draw_references(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
     if model.selected.is_none() {
         ui.label(egui::RichText::new("Select a node in the tree").italics().weak());
         return;
@@ -92,13 +92,22 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui) {
                         row.col(|ui| { ui.label(format!("{:?}", r.target_node_class)); });
                         row.col(|ui| { ui.label(r.target_node_id.to_string()); });
                         let id_string = r.target_node_id.to_string();
+                        let id_clone = r.target_node_id.clone();
+                        let mut copy_path = false;
                         row.response().context_menu(|ui| {
                             if ui.button("Copy NodeId").clicked() {
                                 ui.output_mut(|o| o.copied_text = id_string.clone());
                                 tracing::info!("copied NodeId: {id_string}");
                                 ui.close_menu();
                             }
+                            if ui.button("Copy Path").clicked() {
+                                copy_path = true;
+                                ui.close_menu();
+                            }
                         });
+                        if copy_path {
+                            actions.push(UiAction::CopyPath(id_clone));
+                        }
                     });
                 }
             });

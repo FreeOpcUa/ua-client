@@ -63,7 +63,7 @@ fn draw_right_split(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAct
                 .id_salt("node_summary_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    node_summary::draw(model, ui);
+                    node_summary::draw(model, ui, actions);
                 });
         },
     );

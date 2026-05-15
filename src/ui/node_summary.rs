@@ -1,6 +1,7 @@
+use crate::messages::UiAction;
 use crate::model::AppModel;
 
-pub fn draw(model: &AppModel, ui: &mut egui::Ui) {
+pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
     ui.heading("Node");
     ui.separator();
 
@@ -14,15 +15,24 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui) {
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
             let node_id_str = summary.node_id.to_string();
+            let node_id = summary.node_id.clone();
             ui.label(egui::RichText::new("NodeId").strong());
             let r = ui.add(egui::Label::new(&node_id_str).sense(egui::Sense::click()));
+            let mut copy_path = false;
             r.context_menu(|ui| {
                 if ui.button("Copy NodeId").clicked() {
                     ui.output_mut(|o| o.copied_text = node_id_str.clone());
                     tracing::info!("copied NodeId: {node_id_str}");
                     ui.close_menu();
                 }
+                if ui.button("Copy Path").clicked() {
+                    copy_path = true;
+                    ui.close_menu();
+                }
             });
+            if copy_path {
+                actions.push(UiAction::CopyPath(node_id));
+            }
             ui.end_row();
             row(ui, "BrowseName", &summary.browse_name);
             row(ui, "DisplayName", &summary.display_name);

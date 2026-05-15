@@ -121,6 +121,34 @@ impl UaClient {
         Ok(())
     }
 
+    /// Build the OPC UA Part 4 Annex A.2 RelativePath text for `node_id` by
+    /// walking inverse hierarchical references back to the Root folder.
+    pub async fn browse_path(&self, node_id: &NodeId) -> Result<String> {
+        const MAX_DEPTH: usize = 64;
+        let session = self.session().await?;
+        let root = NodeId::new(0, opcua::types::ObjectId::RootFolder as u32);
+
+        let mut segments: Vec<String> = Vec::new();
+        let mut current = node_id.clone();
+        for _ in 0..MAX_DEPTH {
+            if current == root {
+                break;
+            }
+            let bn = read_browse_name(&session, &current).await?;
+            segments.push(bn);
+            match read_inverse_parent(&session, &current).await? {
+                Some(p) => current = p,
+                None => break,
+            }
+        }
+        segments.reverse();
+        Ok(if segments.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", segments.join("/"))
+        })
+    }
+
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
         let client = build_client()?;
         let descriptions = client
@@ -269,6 +297,67 @@ impl UaClient {
         }
         Ok(rows)
     }
+}
+
+async fn read_browse_name(session: &Session, node_id: &NodeId) -> Result<String> {
+    let to_read = vec![ReadValueId::new(node_id.clone(), AttributeId::BrowseName)];
+    let values = session
+        .read(&to_read, TimestampsToReturn::Neither, 0.0)
+        .await
+        .map_err(|s| anyhow!("read BrowseName failed: {s}"))?;
+    let q = values
+        .into_iter()
+        .next()
+        .and_then(|v| v.value)
+        .and_then(|v| match v {
+            Variant::QualifiedName(q) => Some(*q),
+            _ => None,
+        });
+    Ok(match q {
+        Some(q) => format_path_segment(q.namespace_index, q.name.as_ref()),
+        None => node_id.to_string(),
+    })
+}
+
+async fn read_inverse_parent(session: &Session, node_id: &NodeId) -> Result<Option<NodeId>> {
+    let desc = BrowseDescription {
+        node_id: node_id.clone(),
+        browse_direction: BrowseDirection::Inverse,
+        reference_type_id: NodeId::new(0, ReferenceTypeId::HierarchicalReferences as u32),
+        include_subtypes: true,
+        node_class_mask: NodeClassMask::all().bits(),
+        result_mask: BrowseDescriptionResultMask::all().bits(),
+    };
+    let mut results = session
+        .browse(&[desc], 1, None)
+        .await
+        .map_err(|s| anyhow!("browse inverse failed: {s}"))?;
+    let parent = results
+        .pop()
+        .and_then(|r| r.references)
+        .and_then(|refs| refs.into_iter().next())
+        .map(|r| r.node_id.node_id);
+    Ok(parent)
+}
+
+fn format_path_segment(ns: u16, name: &str) -> String {
+    let escaped = escape_browse_name(name);
+    if ns == 0 {
+        escaped
+    } else {
+        format!("{ns}:{escaped}")
+    }
+}
+
+fn escape_browse_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '&' | '/' | '.' | '<' | '>' | ':' | '#' | '!' | ';') {
+            out.push('&');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn browse_hierarchical(node_id: NodeId) -> BrowseDescription {

@@ -23,6 +23,7 @@ pub enum UiAction {
     AuthCertPathEdited(String),
     AuthKeyPathEdited(String),
     ConfirmConnect,
+    CopyPath(NodeId),
 }
 
 #[derive(Debug)]
@@ -44,5 +45,9 @@ pub enum UiUpdate {
         refs: Result<Vec<ReferenceRow>, String>,
     },
     EndpointsDiscovered(Result<Vec<EndpointInfo>, String>),
+    PathReady {
+        node: NodeId,
+        path: Result<String, String>,
+    },
     Log(LogLine),
 }

@@ -119,6 +119,13 @@ impl UaApp {
                     }
                 }
             }
+            UiUpdate::PathReady { node, path } => match path {
+                Ok(p) => {
+                    ctx.output_mut(|o| o.copied_text = p.clone());
+                    tracing::info!("copied path: {p}");
+                }
+                Err(e) => tracing::error!("path for {node} failed: {e}"),
+            },
             UiUpdate::EndpointsDiscovered(result) => {
                 self.model.endpoints_loading = false;
                 match result {
@@ -196,6 +203,7 @@ impl UaApp {
             UiAction::AuthPasswordEdited(s) => self.model.auth_password = s,
             UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,
             UiAction::AuthKeyPathEdited(s) => self.model.auth_key_path = s,
+            UiAction::CopyPath(node) => self.spawn_browse_path(ctx, node),
             UiAction::ConfirmConnect => {
                 if self.model.selected_endpoint.is_some() {
                     self.model.endpoints_dialog_open = false;
@@ -329,6 +337,17 @@ impl UaApp {
                 node,
                 summary: r,
             });
+            ctx.request_repaint();
+        });
+    }
+
+    fn spawn_browse_path(&self, ctx: &egui::Context, node: NodeId) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let r = client.browse_path(&node).await.map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::PathReady { node, path: r });
             ctx.request_repaint();
         });
     }

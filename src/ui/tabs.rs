@@ -63,14 +63,14 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiActi
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click())
-            .column(Column::auto().at_least(30.0))
+            .column(Column::auto().at_least(90.0))
             .column(Column::auto().at_least(120.0))
             .column(Column::auto().at_least(120.0))
             .column(Column::auto().at_least(120.0))
             .column(Column::auto().at_least(80.0))
             .column(Column::remainder().at_least(140.0))
             .header(20.0, |mut header| {
-                header.col(|ui| { ui.strong("Dir"); });
+                header.col(|ui| { ui.strong("Direction"); });
                 header.col(|ui| { ui.strong("ReferenceType"); });
                 header.col(|ui| { ui.strong("Target"); });
                 header.col(|ui| { ui.strong("BrowseName"); });
@@ -80,7 +80,9 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiActi
             .body(|mut body| {
                 for r in refs {
                     body.row(18.0, |mut row| {
-                        row.col(|ui| { ui.label(if r.is_forward { "→" } else { "←" }); });
+                        row.col(|ui| {
+                            ui.label(if r.is_forward { "Forward" } else { "Inverse" });
+                        });
                         row.col(|ui| { ui.label(&r.reference_type); });
                         row.col(|ui| { ui.label(target_label(r)); });
                         row.col(|ui| { ui.label(&r.target_browse_name); });

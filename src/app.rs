@@ -23,7 +23,7 @@ const STORAGE_AUTH_MODE: &str = "auth_mode";
 const STORAGE_AUTH_USERNAME: &str = "auth_username";
 const STORAGE_AUTH_CERT_PATH: &str = "auth_cert_path";
 const STORAGE_AUTH_KEY_PATH: &str = "auth_key_path";
-const STORAGE_LAST_SELECTIONS: &str = "last_selection_chains";
+const STORAGE_LAST_SELECTIONS: &str = "last_selection_paths";
 
 impl UaApp {
     pub fn new(
@@ -63,12 +63,12 @@ impl UaApp {
             ) {
                 use std::str::FromStr;
                 for (url, ids) in stored {
-                    let chain: Vec<opcua::types::NodeId> = ids
+                    let path: Vec<opcua::types::NodeId> = ids
                         .iter()
                         .filter_map(|s| opcua::types::NodeId::from_str(s).ok())
                         .collect();
-                    if !chain.is_empty() {
-                        model.last_selection_chains.insert(url, chain);
+                    if !path.is_empty() {
+                        model.last_selection_paths.insert(url, path);
                     }
                 }
             }
@@ -97,16 +97,16 @@ impl UaApp {
                 tracing::info!("connected to {}", self.model.endpoint_url);
                 let saved = self
                     .model
-                    .last_selection_chains
+                    .last_selection_paths
                     .get(&self.model.endpoint_url)
                     .cloned();
                 match saved {
-                    Some(chain) if !chain.is_empty() => {
+                    Some(path) if !path.is_empty() => {
                         tracing::info!(
                             "restoring previous selection ({} ancestors)",
-                            chain.len()
+                            path.len()
                         );
-                        self.spawn_restore_selection(ctx, chain);
+                        self.spawn_restore_selection(ctx, path);
                     }
                     _ => {
                         let root = self.model.root_node.clone();
@@ -151,8 +151,8 @@ impl UaApp {
                     }
                 }
             }
-            UiUpdate::SelectionChainResolved { url, chain } => {
-                self.model.last_selection_chains.insert(url, chain);
+            UiUpdate::SelectionPathResolved { url, path } => {
+                self.model.last_selection_paths.insert(url, path);
             }
             UiUpdate::RestoreSelection(node) => {
                 self.model.selected = Some(node.clone());
@@ -288,35 +288,35 @@ impl UaApp {
         if self.model.active_tab == DetailTab::References {
             self.spawn_browse_references(ctx, node.clone());
         }
-        self.spawn_resolve_chain(ctx, node);
+        self.spawn_resolve_path(ctx, node);
     }
 
-    fn spawn_resolve_chain(&self, ctx: &egui::Context, node: NodeId) {
+    fn spawn_resolve_path(&self, ctx: &egui::Context, node: NodeId) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let url = self.model.endpoint_url.clone();
         let ctx = ctx.clone();
         self.rt.spawn(async move {
-            match client.ancestor_chain(&node).await {
-                Ok(chain) => {
-                    let _ = tx.send(UiUpdate::SelectionChainResolved { url, chain });
+            match client.node_path(&node).await {
+                Ok(path) => {
+                    let _ = tx.send(UiUpdate::SelectionPathResolved { url, path });
                     ctx.request_repaint();
                 }
-                Err(e) => tracing::debug!("ancestor_chain for {node} failed: {e}"),
+                Err(e) => tracing::debug!("node_path for {node} failed: {e}"),
             }
         });
     }
 
-    fn spawn_restore_selection(&self, ctx: &egui::Context, chain: Vec<NodeId>) {
+    fn spawn_restore_selection(&self, ctx: &egui::Context, path: Vec<NodeId>) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
         self.rt.spawn(async move {
-            if chain.is_empty() {
+            if path.is_empty() {
                 return;
             }
-            let target = chain.last().cloned().unwrap();
-            for parent in chain.iter().take(chain.len() - 1) {
+            let target = path.last().cloned().unwrap();
+            for parent in path.iter().take(path.len() - 1) {
                 match client.browse_children(parent).await {
                     Ok(children) => {
                         let _ = tx.send(UiUpdate::ChildrenLoaded {
@@ -495,12 +495,12 @@ impl eframe::App for UaApp {
         eframe::set_value(storage, STORAGE_AUTH_USERNAME, &self.model.auth_username);
         eframe::set_value(storage, STORAGE_AUTH_CERT_PATH, &self.model.auth_cert_path);
         eframe::set_value(storage, STORAGE_AUTH_KEY_PATH, &self.model.auth_key_path);
-        let chains: std::collections::HashMap<String, Vec<String>> = self
+        let paths: std::collections::HashMap<String, Vec<String>> = self
             .model
-            .last_selection_chains
+            .last_selection_paths
             .iter()
-            .map(|(url, chain)| (url.clone(), chain.iter().map(|n| n.to_string()).collect()))
+            .map(|(url, path)| (url.clone(), path.iter().map(|n| n.to_string()).collect()))
             .collect();
-        eframe::set_value(storage, STORAGE_LAST_SELECTIONS, &chains);
+        eframe::set_value(storage, STORAGE_LAST_SELECTIONS, &paths);
     }
 }

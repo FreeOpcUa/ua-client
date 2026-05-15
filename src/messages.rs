@@ -49,9 +49,9 @@ pub enum UiUpdate {
         node: NodeId,
         path: Result<String, String>,
     },
-    SelectionChainResolved {
+    SelectionPathResolved {
         url: String,
-        chain: Vec<NodeId>,
+        path: Vec<NodeId>,
     },
     RestoreSelection(NodeId),
     Log(LogLine),

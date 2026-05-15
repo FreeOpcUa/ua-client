@@ -6,7 +6,7 @@ mod tabs;
 mod tree;
 
 use crate::messages::UiAction;
-use crate::model::AppModel;
+use crate::model::{AppModel, ConnectionState};
 
 const SUMMARY_HEIGHT_ID: &str = "ua_client_summary_height";
 const SUMMARY_MIN: f32 = 80.0;
@@ -43,6 +43,9 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
 }
 
 fn draw_right_split(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
+    draw_node_toolbar(ui, model, actions);
+    ui.separator();
+
     let id = egui::Id::new(SUMMARY_HEIGHT_ID);
     let mut height: f32 = ui
         .ctx()
@@ -75,6 +78,31 @@ fn draw_right_split(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAct
     }
 
     tabs::draw(model, ui, actions);
+}
+
+fn draw_node_toolbar(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    let connected = matches!(model.connection, ConnectionState::Connected);
+    let has_selection = model.selected.is_some();
+    ui.horizontal(|ui| {
+        let selected_label = match (connected, model.selected.as_ref()) {
+            (true, Some(id)) => format!("Selected: {id}"),
+            (true, None) => "No node selected".to_string(),
+            (false, _) => "Disconnected".to_string(),
+        };
+        ui.add(
+            egui::Label::new(egui::RichText::new(selected_label).weak())
+                .truncate(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(connected && has_selection, egui::Button::new("Refresh"))
+                .on_hover_text("Re-read the selected node's attributes and references")
+                .clicked()
+            {
+                actions.push(UiAction::RefreshClicked);
+            }
+        });
+    });
 }
 
 fn draw_drag_handle(ui: &mut egui::Ui) -> egui::Response {

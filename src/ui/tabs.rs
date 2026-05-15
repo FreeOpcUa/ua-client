@@ -8,11 +8,6 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         tab_button(ui, model, actions, DetailTab::Events, "Events");
         tab_button(ui, model, actions, DetailTab::DataChanges, "Data Changes");
         tab_button(ui, model, actions, DetailTab::References, "References");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Refresh").clicked() {
-                actions.push(UiAction::RefreshClicked);
-            }
-        });
     });
     ui.separator();
 

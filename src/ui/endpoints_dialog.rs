@@ -18,6 +18,9 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
         .min_height(360.0)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
+            if model.file_picker_open {
+                ui.disable();
+            }
             draw_contents(ui, model, actions);
         });
     if !open {

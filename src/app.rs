@@ -176,6 +176,7 @@ impl UaApp {
             },
             UiUpdate::CertPathPicked(p) => self.model.auth_cert_path = p,
             UiUpdate::KeyPathPicked(p) => self.model.auth_key_path = p,
+            UiUpdate::FilePickerClosed => self.model.file_picker_open = false,
             UiUpdate::EndpointsDiscovered { url, result } => {
                 if url != self.model.endpoint_url {
                     tracing::debug!("dropping endpoints result for stale url {url}");
@@ -266,10 +267,16 @@ impl UaApp {
             UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,
             UiAction::AuthKeyPathEdited(s) => self.model.auth_key_path = s,
             UiAction::PickAuthCertPath => {
-                self.spawn_pick_file(ctx, FilePickTarget::CertPath);
+                if !self.model.file_picker_open {
+                    self.model.file_picker_open = true;
+                    self.spawn_pick_file(ctx, FilePickTarget::CertPath);
+                }
             }
             UiAction::PickAuthKeyPath => {
-                self.spawn_pick_file(ctx, FilePickTarget::KeyPath);
+                if !self.model.file_picker_open {
+                    self.model.file_picker_open = true;
+                    self.spawn_pick_file(ctx, FilePickTarget::KeyPath);
+                }
             }
             UiAction::CopyPath(node) => self.spawn_browse_path(ctx, node),
             UiAction::ConfirmConnect => {
@@ -420,8 +427,9 @@ impl UaApp {
                     FilePickTarget::KeyPath => UiUpdate::KeyPathPicked(s),
                 };
                 let _ = tx.send(update);
-                ctx.request_repaint();
             }
+            let _ = tx.send(UiUpdate::FilePickerClosed);
+            ctx.request_repaint();
         });
     }
 

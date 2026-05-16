@@ -55,6 +55,7 @@ pub enum UiUpdate {
     },
     CertPathPicked(String),
     KeyPathPicked(String),
+    FilePickerClosed,
     PathReady {
         node: NodeId,
         path: Result<String, String>,

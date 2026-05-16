@@ -15,7 +15,11 @@ const SEPARATOR_THICKNESS: f32 = 6.0;
 const SUMMARY_DEFAULT: f32 = 240.0;
 
 pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) {
+    let blocked = model.file_picker_open;
     egui::TopBottomPanel::top("connect_bar").show(ctx, |ui| {
+        if blocked {
+            ui.disable();
+        }
         connect_bar::draw(model, ui, actions);
     });
 
@@ -24,6 +28,9 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
         .default_height(140.0)
         .min_height(60.0)
         .show(ctx, |ui| {
+            if blocked {
+                ui.disable();
+            }
             log_panel::draw(model, ui);
         });
 
@@ -32,10 +39,16 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
         .default_width(260.0)
         .min_width(160.0)
         .show(ctx, |ui| {
+            if blocked {
+                ui.disable();
+            }
             tree::draw(model, ui, actions);
         });
 
     egui::CentralPanel::default().show(ctx, |ui| {
+        if blocked {
+            ui.disable();
+        }
         draw_right_split(model, ui, actions);
     });
 

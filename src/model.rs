@@ -63,6 +63,7 @@ pub struct AppModel {
     pub auth_key_path: String,
     pub last_selection_paths: HashMap<String, Vec<NodeId>>,
     pub endpoint_mode_filter: SecurityMode,
+    pub file_picker_open: bool,
 }
 
 impl Default for AppModel {
@@ -90,6 +91,7 @@ impl Default for AppModel {
             auth_key_path: String::new(),
             last_selection_paths: HashMap::new(),
             endpoint_mode_filter: SecurityMode::None,
+            file_picker_open: false,
         }
     }
 }

@@ -1,13 +1,13 @@
 [package]
 name = "ua-client"
-version = "0.1.0"
-edition = "2021"
+version = "0.5.0"
+edition = "2024"
 description = "Native OPC UA browser/inspector GUI built on async-opcua and egui"
-license = "MIT"
-repository = "https://github.com/FreeOpcUa/ua-client"
-homepage = "https://github.com/FreeOpcUa/ua-client"
 readme = "README.md"
-keywords = ["opcua", "opc-ua", "client", "gui", "egui"]
+homepage = "https://github.com/FreeOpcUa/ua-client"
+repository = "https://github.com/FreeOpcUa/ua-client"
+license = "MIT"
+keywords = ["client", "egui", "gui", "opc-ua", "opcua"]
 categories = ["gui", "network-programming"]
 
 [dependencies]
@@ -25,9 +25,9 @@ eframe = { version = "0.30", default-features = false, features = [
 ] }
 egui = "0.30"
 egui_extras = "0.30"
+rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rfd = "0.15"
 tokio = { version = "1", features = [
   "macros",
   "rt-multi-thread",

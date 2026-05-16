@@ -1,3 +1,5 @@
+mod focus_frame;
+mod focus_gate;
 mod persist;
 
 use std::fmt::Write as _;
@@ -6,16 +8,19 @@ use std::sync::Mutex;
 use cursive::CbSink;
 use cursive::Cursive;
 use cursive::direction::Orientation;
-use cursive::event::{Event, Key};
+use cursive::event::{Event, EventResult, Key};
 use cursive::theme::Theme;
 use cursive::view::{Nameable, Resizable, Scrollable};
 use cursive::views::{
-    BoxedView, Dialog, DummyView, EditView, HideableView, LinearLayout, OnEventView, Panel,
-    ScrollView, SelectView, TextView,
+    BoxedView, Dialog, DummyView, EditView, LinearLayout, OnEventView, PaddedView, ScrollView,
+    SelectView, TextView,
 };
 use opcua::types::NodeId;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+
+use focus_frame::FocusFrame;
+use focus_gate::FocusGate;
 
 use crate::engine::{Engine, FilePickTarget, FrontendCtx};
 use crate::messages::{UiAction, UiUpdate};
@@ -23,17 +28,20 @@ use crate::model::{AppModel, ConnectionState, DetailTab};
 use crate::types::{LogLevel, ValueTree};
 
 const ID_URL: &str = "url";
-const ID_STATUS: &str = "status";
+const ID_TITLE: &str = "title";
 const ID_TREE: &str = "tree";
-const ID_TAB_TITLE: &str = "tab_title";
 const ID_ATTRS: &str = "attrs";
 const ID_REFS: &str = "refs";
 const ID_LOG: &str = "log";
+const ID_CONNECT_BTN: &str = "connect_btn";
+const ID_DISCONNECT_BTN: &str = "disconnect_btn";
 
-const ID_URL_WRAP: &str = "url_wrap";
-const ID_CONNECT_WRAP: &str = "connect_wrap";
-const ID_DISCONNECT_WRAP: &str = "disconnect_wrap";
-const ID_TREE_WRAP: &str = "tree_wrap";
+const ID_URL_GATE: &str = "url_gate";
+const ID_CONNECT_GATE: &str = "connect_gate";
+const ID_DISCONNECT_GATE: &str = "disconnect_gate";
+const ID_TREE_GATE: &str = "tree_gate";
+const ID_ATTRS_GATE: &str = "attrs_gate";
+const ID_REFS_GATE: &str = "refs_gate";
 
 pub fn run(
     mut engine: Engine,
@@ -48,7 +56,7 @@ pub fn run(
     }
 
     let mut siv = cursive::default();
-    siv.set_theme(Theme::terminal_default());
+    siv.set_theme(make_theme());
     let cb_sink = siv.cb_sink().clone();
     let ctx = CursiveCtx::new(cb_sink.clone());
 
@@ -56,7 +64,14 @@ pub fn run(
     build_ui(&mut siv);
     install_global_keys(&mut siv);
 
-    siv.set_user_data(TuiState { engine, ctx });
+    siv.set_user_data(TuiState {
+        engine,
+        ctx,
+        pending_quit: false,
+        quit_scheduled: false,
+        last_connection: ConnectionState::Disconnected,
+    });
+    dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(&mut siv);
 
     siv.run();
@@ -78,6 +93,9 @@ fn save_state(siv: &mut Cursive) {
 struct TuiState {
     engine: Engine,
     ctx: CursiveCtx,
+    pending_quit: bool,
+    quit_scheduled: bool,
+    last_connection: ConnectionState,
 }
 
 #[derive(Clone)]
@@ -127,6 +145,23 @@ impl FrontendCtx for CursiveCtx {
     }
 }
 
+fn make_theme() -> Theme {
+    let mut theme = Theme::terminal_default();
+    use cursive::style::{
+        BaseColor, Color, ColorStyle, Effect, Effects, PaletteColor::*, PaletteStyle, Style,
+    };
+    let palette = &mut theme.palette;
+    palette[Highlight] = Color::Dark(BaseColor::Yellow);
+    palette[HighlightInactive] = Color::Dark(BaseColor::Blue);
+    palette[HighlightText] = Color::Dark(BaseColor::Black);
+    palette[PaletteStyle::EditableText] = ColorStyle::secondary().into();
+    palette[PaletteStyle::EditableTextCursor] = Style {
+        color: ColorStyle::secondary(),
+        effects: Effects::only(Effect::Reverse),
+    };
+    theme
+}
+
 fn start_update_pump(
     rt: &Runtime,
     mut update_rx: mpsc::UnboundedReceiver<UiUpdate>,
@@ -150,6 +185,7 @@ fn apply_and_refresh(siv: &mut Cursive, update: UiUpdate) {
         st.engine.apply_update(&ctx, update);
     });
     refresh_all(siv);
+    maybe_finish_quit(siv);
 }
 
 fn dispatch_action(siv: &mut Cursive, action: UiAction) {
@@ -158,6 +194,49 @@ fn dispatch_action(siv: &mut Cursive, action: UiAction) {
         st.engine.dispatch(&ctx, action);
     });
     refresh_all(siv);
+}
+
+fn request_quit(siv: &mut Cursive) {
+    let Some(st) = siv.user_data::<TuiState>() else {
+        siv.quit();
+        return;
+    };
+    if st.pending_quit {
+        tracing::warn!("force-quit requested; bailing immediately");
+        siv.quit();
+        return;
+    }
+    let conn = st.engine.model.connection;
+    match conn {
+        ConnectionState::Disconnected => siv.quit(),
+        ConnectionState::Connected | ConnectionState::Connecting => {
+            tracing::info!("quit requested — disconnecting first (press again to force)");
+            st.pending_quit = true;
+            dispatch_action(siv, UiAction::DisconnectClicked);
+        }
+        ConnectionState::Disconnecting => {
+            tracing::info!("already disconnecting; will quit when finished");
+            st.pending_quit = true;
+        }
+    }
+}
+
+fn maybe_finish_quit(siv: &mut Cursive) {
+    let Some(st) = siv.user_data::<TuiState>() else {
+        return;
+    };
+    if !st.pending_quit || st.quit_scheduled {
+        return;
+    }
+    if !matches!(st.engine.model.connection, ConnectionState::Disconnected) {
+        return;
+    }
+    st.quit_scheduled = true;
+    let sink = st.ctx.cb_sink.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let _ = sink.send(Box::new(|s: &mut Cursive| s.quit()));
+    });
 }
 
 fn final_disconnect(siv: &mut Cursive) {
@@ -178,6 +257,9 @@ fn build_ui(siv: &mut Cursive) {
     siv.set_window_title("ua-client-tui");
     siv.set_fps(0);
 
+    let title = TextView::new("OPC UA Client: Disconnected")
+        .center()
+        .with_name(ID_TITLE);
     let connect_bar = build_connect_bar();
     let tree = build_tree_view();
     let attrs = build_attrs_view();
@@ -185,23 +267,35 @@ fn build_ui(siv: &mut Cursive) {
     let log = build_log_view();
 
     let detail_pane = LinearLayout::new(Orientation::Vertical)
-        .child(TextView::new("Attributes (press 1/2 to switch tabs)").with_name(ID_TAB_TITLE))
-        .child(DummyView.fixed_height(1))
-        .child(Panel::new(attrs).title("Attributes"))
-        .child(Panel::new(refs).title("References"));
+        .child(gated(framed(attrs, "Attributes"), ID_ATTRS_GATE))
+        .child(gated(framed(refs, "References"), ID_REFS_GATE));
 
-    let tree_panel = Panel::new(tree).title("Address Space").fixed_width(36);
-    let tree_wrap = hideable(tree_panel, ID_TREE_WRAP);
+    let tree_frame = framed(tree, "Address Space").fixed_width(36);
+    let tree_gate = gated(tree_frame, ID_TREE_GATE);
     let center = LinearLayout::new(Orientation::Horizontal)
-        .child(tree_wrap)
+        .child(tree_gate)
         .child(detail_pane.full_width());
 
+    let log_frame = framed(log, "Log").fixed_height(8);
+
     let root = LinearLayout::new(Orientation::Vertical)
+        .child(title)
         .child(connect_bar)
         .child(center.full_height())
-        .child(Panel::new(log).title("Log").fixed_height(8));
+        .child(log_frame);
 
     siv.add_fullscreen_layer(root.full_screen());
+}
+
+fn framed<V: cursive::view::View + 'static>(view: V, title: &str) -> FocusFrame<BoxedView> {
+    FocusFrame::new(BoxedView::boxed(view), title)
+}
+
+fn gated<V: cursive::view::View + 'static>(
+    view: V,
+    name: &str,
+) -> cursive::views::NamedView<FocusGate<BoxedView>> {
+    FocusGate::new(BoxedView::boxed(view)).with_name(name)
 }
 
 fn build_connect_bar() -> impl cursive::view::View {
@@ -212,42 +306,36 @@ fn build_connect_bar() -> impl cursive::view::View {
         .on_submit(|siv, _| dispatch_action(siv, UiAction::ConnectClicked))
         .with_name(ID_URL)
         .min_width(40);
-    let url_wrap = hideable(url_edit, ID_URL_WRAP);
-
-    let status = TextView::new("Disconnected").with_name(ID_STATUS);
+    let url_gate = gated(framed(url_edit, "URL").full_width(), ID_URL_GATE);
 
     let connect_btn = cursive::views::Button::new("Connect", |siv| {
-        dispatch_action(siv, UiAction::ConnectClicked)
-    });
+        dispatch_action(siv, UiAction::ConnectClicked);
+    })
+    .with_name(ID_CONNECT_BTN);
     let disconnect_btn = cursive::views::Button::new("Disconnect", |siv| {
-        dispatch_action(siv, UiAction::DisconnectClicked)
-    });
-    let connect_wrap = hideable(connect_btn, ID_CONNECT_WRAP);
-    let disconnect_wrap = hideable(disconnect_btn, ID_DISCONNECT_WRAP);
-    let quit_btn = cursive::views::Button::new("Quit", |siv| siv.quit());
+        dispatch_action(siv, UiAction::DisconnectClicked);
+    })
+    .with_name(ID_DISCONNECT_BTN);
+    let quit_btn = cursive::views::Button::new("Quit", request_quit);
 
-    Panel::new(
-        LinearLayout::new(Orientation::Horizontal)
-            .child(TextView::new("URL: "))
-            .child(url_wrap)
-            .child(DummyView.fixed_width(2))
-            .child(connect_wrap)
-            .child(DummyView.fixed_width(1))
-            .child(disconnect_wrap)
-            .child(DummyView.fixed_width(2))
-            .child(status.full_width())
-            .child(quit_btn),
-    )
-    .title("Connection")
-}
+    let connect_gate = gated(
+        PaddedView::lrtb(0, 0, 1, 0, connect_btn),
+        ID_CONNECT_GATE,
+    );
+    let disconnect_gate = gated(
+        PaddedView::lrtb(0, 0, 1, 0, disconnect_btn),
+        ID_DISCONNECT_GATE,
+    );
+    let quit_padded = PaddedView::lrtb(0, 0, 1, 0, quit_btn);
 
-fn hideable<V: cursive::view::View + 'static>(
-    view: V,
-    name: &str,
-) -> cursive::views::NamedView<HideableView<BoxedView>> {
-    HideableView::new(BoxedView::boxed(view))
-        .hidden()
-        .with_name(name)
+    LinearLayout::new(Orientation::Horizontal)
+        .child(url_gate)
+        .child(DummyView.fixed_width(2))
+        .child(connect_gate)
+        .child(DummyView.fixed_width(1))
+        .child(disconnect_gate)
+        .child(DummyView.fixed_width(2))
+        .child(quit_padded)
 }
 
 fn build_tree_view() -> impl cursive::view::View {
@@ -263,45 +351,20 @@ fn build_tree_view() -> impl cursive::view::View {
         .scrollable();
 
     OnEventView::new(select)
-        .on_pre_event_inner('j', |_, _| Some(cursive::event::EventResult::with_cb(|siv| {
-            siv.call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
-                v.select_down(1);
-            });
-        })))
-        .on_pre_event_inner('k', |_, _| Some(cursive::event::EventResult::with_cb(|siv| {
-            siv.call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
-                v.select_up(1);
-            });
-        })))
-        .on_pre_event_inner('l', |_, _| Some(cursive::event::EventResult::with_cb(tree_expand_current)))
-        .on_pre_event_inner(Key::Right, |_, _| Some(cursive::event::EventResult::with_cb(tree_expand_current)))
-        .on_pre_event_inner(' ', |_, _| Some(cursive::event::EventResult::with_cb(tree_expand_current)))
-        .on_pre_event_inner('h', |_, _| Some(cursive::event::EventResult::with_cb(tree_collapse_current)))
-        .on_pre_event_inner(Key::Left, |_, _| Some(cursive::event::EventResult::with_cb(tree_collapse_current)))
-}
-
-fn tree_expand_current(siv: &mut Cursive) {
-    let selected = siv
-        .call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
-            v.selection().map(|arc| (*arc).clone())
+        .on_pre_event_inner('j', |_, _| {
+            Some(EventResult::with_cb(|siv| {
+                siv.call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
+                    v.select_down(1);
+                });
+            }))
         })
-        .flatten();
-    if let Some(item) = selected
-        && item.has_children
-    {
-        dispatch_action(siv, UiAction::NodeToggleExpand(item.node_id));
-    }
-}
-
-fn tree_collapse_current(siv: &mut Cursive) {
-    let selected = siv
-        .call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
-            v.selection().map(|arc| (*arc).clone())
+        .on_pre_event_inner('k', |_, _| {
+            Some(EventResult::with_cb(|siv| {
+                siv.call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
+                    v.select_up(1);
+                });
+            }))
         })
-        .flatten();
-    if let Some(item) = selected {
-        dispatch_action(siv, UiAction::NodeToggleExpand(item.node_id));
-    }
 }
 
 fn build_attrs_view() -> impl cursive::view::View {
@@ -327,32 +390,23 @@ fn build_log_view() -> impl cursive::view::View {
 }
 
 fn install_global_keys(siv: &mut Cursive) {
-    siv.add_global_callback('q', |s| s.quit());
-    siv.add_global_callback(Event::CtrlChar('c'), |s| s.quit());
+    siv.add_global_callback(Event::CtrlChar('c'), request_quit);
+    siv.add_global_callback('q', request_quit);
     siv.add_global_callback(Key::Esc, |s| dispatch_action(s, UiAction::ClearSelection));
     siv.add_global_callback('r', |s| dispatch_action(s, UiAction::RefreshClicked));
-    siv.add_global_callback('1', |s| {
-        dispatch_action(s, UiAction::TabSelected(DetailTab::Attributes))
-    });
-    siv.add_global_callback('2', |s| {
-        dispatch_action(s, UiAction::TabSelected(DetailTab::References))
-    });
     siv.add_global_callback('?', show_help);
 }
 
 fn show_help(siv: &mut Cursive) {
     let body = "\
 Navigation:
-  Tab / Shift+Tab   Move focus between panels
-  Arrows / hjkl     Move within a panel
-  Enter             Select / activate
-  Space or l        Expand tree node
-  h                 Collapse tree node
-  Esc               Clear selection
-  1 / 2             Switch detail tab (Attributes / References)
-  r                 Refresh selected node
-  q / Ctrl+C        Quit
-  ?                 This help";
+  Tab / Shift+Tab    Move focus between widgets
+  Arrows / j / k     Move within the focused widget
+  Enter              Select node (and expand/collapse if it has children)
+  Esc                Clear selection
+  r                  Refresh selected node
+  q / Ctrl+C         Quit (disconnects cleanly first)
+  ?                  This help";
     siv.add_layer(Dialog::info(body).title("Keys"));
 }
 
@@ -367,33 +421,48 @@ fn refresh_all(siv: &mut Cursive) {
         .user_data::<TuiState>()
         .map(|st| snapshot_model(&st.engine.model));
     let Some(snap) = snapshot else { return };
-    refresh_visibility(siv, &snap);
-    refresh_status(siv, &snap);
+    refresh_title(siv, &snap);
     refresh_url(siv, &snap);
     refresh_tree(siv, &snap);
     refresh_attrs(siv, &snap);
     refresh_refs(siv, &snap);
     refresh_log(siv, &snap);
-    refresh_tab_title(siv, &snap);
+    refresh_focus_gates(siv, &snap);
+    track_connection_change(siv);
 }
 
-fn refresh_visibility(siv: &mut Cursive, snap: &ModelSnapshot) {
-    let disconnected = matches!(snap.connection, ConnectionState::Disconnected);
-    let connected = matches!(snap.connection, ConnectionState::Connected);
-    let in_session = matches!(
-        snap.connection,
-        ConnectionState::Connected | ConnectionState::Connecting
-    );
-    set_visible(siv, ID_URL_WRAP, disconnected);
-    set_visible(siv, ID_CONNECT_WRAP, disconnected);
-    set_visible(siv, ID_DISCONNECT_WRAP, in_session);
-    set_visible(siv, ID_TREE_WRAP, connected);
+fn refresh_focus_gates(siv: &mut Cursive, snap: &ModelSnapshot) {
+    let c = snap.connection;
+    let disconnected = matches!(c, ConnectionState::Disconnected);
+    let in_session = matches!(c, ConnectionState::Connected | ConnectionState::Connecting);
+    let connected = matches!(c, ConnectionState::Connected);
+    set_gate(siv, ID_URL_GATE, disconnected);
+    set_gate(siv, ID_CONNECT_GATE, disconnected);
+    set_gate(siv, ID_DISCONNECT_GATE, in_session);
+    set_gate(siv, ID_TREE_GATE, connected);
+    set_gate(siv, ID_ATTRS_GATE, connected);
+    set_gate(siv, ID_REFS_GATE, connected);
 }
 
-fn set_visible(siv: &mut Cursive, name: &str, visible: bool) {
-    siv.call_on_name(name, |v: &mut HideableView<BoxedView>| {
-        v.set_visible(visible);
-    });
+fn set_gate(siv: &mut Cursive, name: &str, enabled: bool) {
+    siv.call_on_name(name, |g: &mut FocusGate<BoxedView>| g.set_enabled(enabled));
+}
+
+fn track_connection_change(siv: &mut Cursive) {
+    let Some(st) = siv.user_data::<TuiState>() else {
+        return;
+    };
+    let current = st.engine.model.connection;
+    if st.last_connection == current {
+        return;
+    }
+    st.last_connection = current;
+    let target = match current {
+        ConnectionState::Disconnected => ID_URL,
+        ConnectionState::Connecting | ConnectionState::Disconnecting => ID_DISCONNECT_BTN,
+        ConnectionState::Connected => ID_TREE,
+    };
+    siv.focus_name(target).ok();
 }
 
 struct ModelSnapshot {
@@ -405,7 +474,6 @@ struct ModelSnapshot {
     refs_rows: Vec<RefRow>,
     refs_loading: bool,
     log_text: String,
-    active_tab: DetailTab,
 }
 
 struct TreeRow {
@@ -428,21 +496,22 @@ fn snapshot_model(model: &AppModel) -> ModelSnapshot {
         refs_rows: build_refs_rows(model),
         refs_loading: model.references_loading,
         log_text: build_log_text(model),
-        active_tab: model.active_tab,
     }
 }
 
-fn refresh_status(siv: &mut Cursive, snap: &ModelSnapshot) {
-    let label = match snap.connection {
+fn refresh_title(siv: &mut Cursive, snap: &ModelSnapshot) {
+    let state = match snap.connection {
         ConnectionState::Disconnected => "Disconnected".to_string(),
         ConnectionState::Connecting => "Connecting…".to_string(),
         ConnectionState::Connected => match &snap.selected {
             Some(n) => format!("Connected · {n}"),
-            None => "Connected · no node selected".to_string(),
+            None => "Connected".to_string(),
         },
         ConnectionState::Disconnecting => "Disconnecting…".to_string(),
     };
-    siv.call_on_name(ID_STATUS, |v: &mut TextView| v.set_content(label));
+    siv.call_on_name(ID_TITLE, |v: &mut TextView| {
+        v.set_content(format!("OPC UA Client: {state}"));
+    });
 }
 
 fn refresh_url(siv: &mut Cursive, snap: &ModelSnapshot) {
@@ -505,16 +574,6 @@ fn refresh_log(siv: &mut Cursive, snap: &ModelSnapshot) {
         v.get_inner_mut().set_content(snap.log_text.clone());
         v.scroll_to_bottom();
     });
-}
-
-fn refresh_tab_title(siv: &mut Cursive, snap: &ModelSnapshot) {
-    let label = match snap.active_tab {
-        DetailTab::Attributes => "Active tab: Attributes  (1=Attrs  2=Refs)",
-        DetailTab::References => "Active tab: References  (1=Attrs  2=Refs)",
-        DetailTab::Events => "Active tab: Events  (1=Attrs  2=Refs)",
-        DetailTab::DataChanges => "Active tab: DataChanges  (1=Attrs  2=Refs)",
-    };
-    siv.call_on_name(ID_TAB_TITLE, |v: &mut TextView| v.set_content(label));
 }
 
 fn build_tree_rows(model: &AppModel) -> Vec<TreeRow> {

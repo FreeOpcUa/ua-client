@@ -239,21 +239,49 @@ fn draw_endpoints_list(
     actions: &mut Vec<UiAction>,
 ) {
     let selected_key = model.selected_endpoint.as_ref().map(endpoint_key);
+    let visuals = ui.style().visuals.clone();
+    let stroke_color = if visuals.dark_mode {
+        egui::Color32::from_gray(80)
+    } else {
+        egui::Color32::from_gray(170)
+    };
     egui::ScrollArea::vertical().show(ui, |ui| {
         for ep in eps {
             let is_selected = selected_key.as_ref() == Some(&endpoint_key(ep));
-            let header = format!(
-                "{}    (level {})    [{}]",
-                ep.security_policy,
-                ep.security_level,
-                token_label(ep),
-            );
-            let text = egui::RichText::new(format!("{header}\n    {}", ep.endpoint_url));
-            if ui
-                .selectable_label(is_selected, text)
-                .clicked()
-                && !is_selected
-            {
+            let frame = egui::Frame::default()
+                .stroke(egui::Stroke::new(1.0, stroke_color))
+                .rounding(4.0)
+                .fill(if is_selected {
+                    visuals.selection.bg_fill
+                } else {
+                    egui::Color32::TRANSPARENT
+                })
+                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                .outer_margin(egui::Margin::symmetric(0.0, 3.0));
+            let inner = frame.show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}    (level {})    [{}]",
+                            ep.security_policy,
+                            ep.security_level,
+                            token_label(ep),
+                        ))
+                        .strong(),
+                    );
+                    ui.label(egui::RichText::new(&ep.endpoint_url).weak());
+                });
+            });
+            let response = inner.response.interact(egui::Sense::click());
+            if response.hovered() && !is_selected {
+                ui.painter().rect_stroke(
+                    response.rect,
+                    4.0,
+                    egui::Stroke::new(1.5, visuals.widgets.hovered.fg_stroke.color),
+                );
+            }
+            if response.clicked() && !is_selected {
                 actions.push(UiAction::SelectEndpoint((*ep).clone()));
             }
         }

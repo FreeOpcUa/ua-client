@@ -31,6 +31,7 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
             .inner_margin(egui::Margin::symmetric(6.0, 4.0))
             .outer_margin(egui::Margin::symmetric(0.0, 2.0))
             .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 draw_attribute(ui, &id_salt, attr, &node_id_str, &node_id, actions);
             });
     }

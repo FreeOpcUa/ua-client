@@ -241,6 +241,7 @@ impl UaApp {
                 self.model.selected_endpoint = None;
             }
             UiAction::SetAuthMode(mode) => self.model.auth_mode = mode,
+            UiAction::SetEndpointModeFilter(mode) => self.model.endpoint_mode_filter = mode,
             UiAction::AuthUsernameEdited(s) => self.model.auth_username = s,
             UiAction::AuthPasswordEdited(s) => self.model.auth_password = s,
             UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,

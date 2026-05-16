@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use opcua::types::{NodeId, ObjectId};
 
-use crate::types::{AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{
+    AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+};
 
 const MAX_LOG_LINES: usize = 1000;
 const MAX_HISTORY: usize = 20;
@@ -60,6 +62,7 @@ pub struct AppModel {
     pub auth_cert_path: String,
     pub auth_key_path: String,
     pub last_selection_paths: HashMap<String, Vec<NodeId>>,
+    pub endpoint_mode_filter: SecurityMode,
 }
 
 impl Default for AppModel {
@@ -86,6 +89,7 @@ impl Default for AppModel {
             auth_cert_path: String::new(),
             auth_key_path: String::new(),
             last_selection_paths: HashMap::new(),
+            endpoint_mode_filter: SecurityMode::SignAndEncrypt,
         }
     }
 }

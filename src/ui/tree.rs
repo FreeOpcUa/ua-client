@@ -5,7 +5,7 @@ use crate::model::{AppModel, ConnectionState};
 use crate::types::TreeChild;
 
 pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
-    ui.heading("Address Space");
+    ui.label(egui::RichText::new("Address Space").strong());
     ui.separator();
 
     if !matches!(model.connection, ConnectionState::Connected) {

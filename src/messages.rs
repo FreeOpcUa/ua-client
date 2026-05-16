@@ -1,7 +1,9 @@
 use opcua::types::NodeId;
 
 use crate::model::DetailTab;
-use crate::types::{AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, TreeChild};
+use crate::types::{
+    AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+};
 
 #[derive(Debug, Clone)]
 pub enum UiAction {
@@ -18,6 +20,7 @@ pub enum UiAction {
     SelectEndpoint(EndpointInfo),
     ClearSelectedEndpoint,
     SetAuthMode(AuthMode),
+    SetEndpointModeFilter(SecurityMode),
     AuthUsernameEdited(String),
     AuthPasswordEdited(String),
     AuthCertPathEdited(String),

@@ -3,7 +3,7 @@ use crate::model::AppModel;
 use crate::types::{NodeAttribute, ValueTree};
 
 pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
-    ui.heading("Node Attributes");
+    ui.label(egui::RichText::new("Node Attributes").strong());
     ui.separator();
 
     let Some(summary) = model.node_summary.as_ref() else {
@@ -18,9 +18,21 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
 
     let node_id_str = summary.node_id.to_string();
     let node_id = summary.node_id.clone();
+    let stroke_color = if ui.style().visuals.dark_mode {
+        egui::Color32::from_gray(80)
+    } else {
+        egui::Color32::from_gray(170)
+    };
     for (i, attr) in summary.attributes.iter().enumerate() {
         let id_salt = format!("attr_{i}_{}", attr.name);
-        draw_attribute(ui, &id_salt, attr, &node_id_str, &node_id, actions);
+        egui::Frame::default()
+            .stroke(egui::Stroke::new(1.0, stroke_color))
+            .rounding(4.0)
+            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+            .outer_margin(egui::Margin::symmetric(0.0, 2.0))
+            .show(ui, |ui| {
+                draw_attribute(ui, &id_salt, attr, &node_id_str, &node_id, actions);
+            });
     }
 }
 

@@ -29,21 +29,54 @@ fn draw_contents(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction
     draw_header(ui, model, actions);
     ui.separator();
     draw_auth(ui, model, actions);
+    draw_mode_filter(ui, model, actions);
     ui.separator();
 
     let total_h = ui.available_height();
-    let table_h = (total_h - BOTTOM_RESERVED).max(80.0);
+    let list_h = (total_h - BOTTOM_RESERVED).max(80.0);
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), table_h),
+        egui::vec2(ui.available_width(), list_h),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
-            ui.set_min_height(table_h);
-            ui.set_max_height(table_h);
+            ui.set_min_height(list_h);
+            ui.set_max_height(list_h);
             draw_endpoints_area(ui, model, actions);
         },
     );
     ui.separator();
     draw_bottom_bar(ui, model, actions);
+}
+
+fn draw_mode_filter(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Mode:").strong());
+        mode_radio(ui, model, actions, SecurityMode::None, "None");
+        mode_radio(ui, model, actions, SecurityMode::Sign, "Sign");
+        mode_radio(
+            ui,
+            model,
+            actions,
+            SecurityMode::SignAndEncrypt,
+            "Sign and Encrypt",
+        );
+    });
+}
+
+fn mode_radio(
+    ui: &mut egui::Ui,
+    model: &AppModel,
+    actions: &mut Vec<UiAction>,
+    mode: SecurityMode,
+    label: &str,
+) {
+    let selected = model.endpoint_mode_filter == mode;
+    if ui
+        .add(egui::RadioButton::new(selected, label))
+        .clicked()
+        && !selected
+    {
+        actions.push(UiAction::SetEndpointModeFilter(mode));
+    }
 }
 
 fn draw_header(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
@@ -179,51 +212,51 @@ fn draw_endpoints_area(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Ui
         ui.label("No endpoints returned (server unreachable or discovery failed).");
         return;
     }
-    draw_endpoints_table(ui, model, eps, actions);
+    let mut filtered: Vec<&EndpointInfo> = eps
+        .iter()
+        .filter(|e| e.security_mode == model.endpoint_mode_filter)
+        .collect();
+    filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+
+    if filtered.is_empty() {
+        ui.label(
+            egui::RichText::new(format!(
+                "No endpoints offered with mode '{}'",
+                model.endpoint_mode_filter.label()
+            ))
+            .italics()
+            .weak(),
+        );
+        return;
+    }
+    draw_endpoints_list(ui, model, &filtered, actions);
 }
 
-fn draw_endpoints_table(
+fn draw_endpoints_list(
     ui: &mut egui::Ui,
     model: &AppModel,
-    eps: &[EndpointInfo],
+    eps: &[&EndpointInfo],
     actions: &mut Vec<UiAction>,
 ) {
-    use egui_extras::{Column, TableBuilder};
     let selected_key = model.selected_endpoint.as_ref().map(endpoint_key);
-
-    egui::ScrollArea::both().show(ui, |ui| {
-        TableBuilder::new(ui)
-            .striped(true)
-            .resizable(true)
-            .sense(egui::Sense::click())
-            .column(Column::auto().at_least(180.0))
-            .column(Column::auto().at_least(140.0))
-            .column(Column::auto().at_least(50.0))
-            .column(Column::auto().at_least(140.0))
-            .column(Column::remainder().at_least(200.0))
-            .header(22.0, |mut header| {
-                header.col(|ui| { ui.strong("Security policy"); });
-                header.col(|ui| { ui.strong("Mode"); });
-                header.col(|ui| { ui.strong("Level"); });
-                header.col(|ui| { ui.strong("Identity tokens"); });
-                header.col(|ui| { ui.strong("Endpoint URL"); });
-            })
-            .body(|mut body| {
-                for ep in eps {
-                    let is_selected = selected_key.as_ref() == Some(&endpoint_key(ep));
-                    body.row(24.0, |mut row| {
-                        row.set_selected(is_selected);
-                        row.col(|ui| { ui.label(&ep.security_policy); });
-                        row.col(|ui| { ui.label(ep.security_mode.label()); });
-                        row.col(|ui| { ui.label(format!("{}", ep.security_level)); });
-                        row.col(|ui| { ui.label(token_label(ep)); });
-                        row.col(|ui| { ui.label(&ep.endpoint_url); });
-                        if row.response().clicked() && !is_selected {
-                            actions.push(UiAction::SelectEndpoint(ep.clone()));
-                        }
-                    });
-                }
-            });
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for ep in eps {
+            let is_selected = selected_key.as_ref() == Some(&endpoint_key(ep));
+            let header = format!(
+                "{}    (level {})    [{}]",
+                ep.security_policy,
+                ep.security_level,
+                token_label(ep),
+            );
+            let text = egui::RichText::new(format!("{header}\n    {}", ep.endpoint_url));
+            if ui
+                .selectable_label(is_selected, text)
+                .clicked()
+                && !is_selected
+            {
+                actions.push(UiAction::SelectEndpoint((*ep).clone()));
+            }
+        }
     });
 }
 

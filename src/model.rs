@@ -89,7 +89,7 @@ impl Default for AppModel {
             auth_cert_path: String::new(),
             auth_key_path: String::new(),
             last_selection_paths: HashMap::new(),
-            endpoint_mode_filter: SecurityMode::SignAndEncrypt,
+            endpoint_mode_filter: SecurityMode::None,
         }
     }
 }

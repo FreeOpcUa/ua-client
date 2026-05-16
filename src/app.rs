@@ -17,6 +17,12 @@ pub struct UaApp {
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum FilePickTarget {
+    CertPath,
+    KeyPath,
+}
+
 const STORAGE_ENDPOINT_URL: &str = "endpoint_url";
 const STORAGE_ENDPOINT_HISTORY: &str = "endpoint_history";
 const STORAGE_AUTH_MODE: &str = "auth_mode";
@@ -168,6 +174,8 @@ impl UaApp {
                 }
                 Err(e) => tracing::error!("path for {node} failed: {e}"),
             },
+            UiUpdate::CertPathPicked(p) => self.model.auth_cert_path = p,
+            UiUpdate::KeyPathPicked(p) => self.model.auth_key_path = p,
             UiUpdate::EndpointsDiscovered { url, result } => {
                 if url != self.model.endpoint_url {
                     tracing::debug!("dropping endpoints result for stale url {url}");
@@ -257,6 +265,12 @@ impl UaApp {
             UiAction::AuthPasswordEdited(s) => self.model.auth_password = s,
             UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,
             UiAction::AuthKeyPathEdited(s) => self.model.auth_key_path = s,
+            UiAction::PickAuthCertPath => {
+                self.spawn_pick_file(ctx, FilePickTarget::CertPath);
+            }
+            UiAction::PickAuthKeyPath => {
+                self.spawn_pick_file(ctx, FilePickTarget::KeyPath);
+            }
             UiAction::CopyPath(node) => self.spawn_browse_path(ctx, node),
             UiAction::ConfirmConnect => {
                 if self.model.selected_endpoint.is_some() {
@@ -377,6 +391,38 @@ impl UaApp {
         if self.model.discovered_endpoints.is_none() && !self.model.endpoints_loading {
             self.spawn_discover_endpoints(ctx);
         }
+    }
+
+    fn spawn_pick_file(&self, ctx: &egui::Context, target: FilePickTarget) {
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        let (title, default_dir) = match target {
+            FilePickTarget::CertPath => (
+                "Pick client certificate",
+                self.model.auth_cert_path.clone(),
+            ),
+            FilePickTarget::KeyPath => (
+                "Pick private key",
+                self.model.auth_key_path.clone(),
+            ),
+        };
+        self.rt.spawn_blocking(move || {
+            let mut dlg = rfd::FileDialog::new().set_title(title);
+            if let Some(parent) = std::path::Path::new(&default_dir).parent() {
+                if parent.exists() {
+                    dlg = dlg.set_directory(parent);
+                }
+            }
+            if let Some(path) = dlg.pick_file() {
+                let s = path.to_string_lossy().into_owned();
+                let update = match target {
+                    FilePickTarget::CertPath => UiUpdate::CertPathPicked(s),
+                    FilePickTarget::KeyPath => UiUpdate::KeyPathPicked(s),
+                };
+                let _ = tx.send(update);
+                ctx.request_repaint();
+            }
+        });
     }
 
     fn spawn_discover_endpoints(&mut self, ctx: &egui::Context) {

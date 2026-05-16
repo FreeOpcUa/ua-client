@@ -28,8 +28,9 @@ pub fn draw(model: &AppModel, ctx: &egui::Context, actions: &mut Vec<UiAction>) 
 fn draw_contents(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     draw_header(ui, model, actions);
     ui.separator();
-    draw_auth(ui, model, actions);
-    draw_mode_filter(ui, model, actions);
+    section_frame(ui, |ui| draw_auth(ui, model, actions));
+    ui.add_space(4.0);
+    section_frame(ui, |ui| draw_mode_filter(ui, model, actions));
     ui.separator();
 
     let total_h = ui.available_height();
@@ -177,23 +178,54 @@ fn draw_certificate_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Ve
     ui.horizontal(|ui| {
         ui.label("Cert path:");
         let mut p = model.auth_cert_path.clone();
+        let browse_w = 80.0;
         if ui
-            .add(egui::TextEdit::singleline(&mut p).desired_width(ui.available_width() - 20.0))
+            .add(
+                egui::TextEdit::singleline(&mut p)
+                    .desired_width(ui.available_width() - browse_w - 12.0),
+            )
             .changed()
         {
             actions.push(UiAction::AuthCertPathEdited(p));
+        }
+        if ui.button("Browse…").clicked() {
+            actions.push(UiAction::PickAuthCertPath);
         }
     });
     ui.horizontal(|ui| {
         ui.label("Key path: ");
         let mut p = model.auth_key_path.clone();
+        let browse_w = 80.0;
         if ui
-            .add(egui::TextEdit::singleline(&mut p).desired_width(ui.available_width() - 20.0))
+            .add(
+                egui::TextEdit::singleline(&mut p)
+                    .desired_width(ui.available_width() - browse_w - 12.0),
+            )
             .changed()
         {
             actions.push(UiAction::AuthKeyPathEdited(p));
         }
+        if ui.button("Browse…").clicked() {
+            actions.push(UiAction::PickAuthKeyPath);
+        }
     });
+}
+
+fn section_frame<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let stroke_color = if ui.style().visuals.dark_mode {
+        egui::Color32::from_gray(80)
+    } else {
+        egui::Color32::from_gray(170)
+    };
+    egui::Frame::default()
+        .stroke(egui::Stroke::new(1.0, stroke_color))
+        .rounding(4.0)
+        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            add_contents(ui)
+        })
+        .inner
 }
 
 fn draw_endpoints_area(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {

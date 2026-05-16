@@ -25,6 +25,8 @@ pub enum UiAction {
     AuthPasswordEdited(String),
     AuthCertPathEdited(String),
     AuthKeyPathEdited(String),
+    PickAuthCertPath,
+    PickAuthKeyPath,
     ConfirmConnect,
     CopyPath(NodeId),
 }
@@ -51,6 +53,8 @@ pub enum UiUpdate {
         url: String,
         result: Result<Vec<EndpointInfo>, String>,
     },
+    CertPathPicked(String),
+    KeyPathPicked(String),
     PathReady {
         node: NodeId,
         path: Result<String, String>,

@@ -168,16 +168,20 @@ impl UaApp {
                 }
                 Err(e) => tracing::error!("path for {node} failed: {e}"),
             },
-            UiUpdate::EndpointsDiscovered(result) => {
-                self.model.endpoints_loading = false;
-                match result {
-                    Ok(eps) => {
-                        tracing::info!("discovered {} endpoint(s)", eps.len());
-                        self.model.discovered_endpoints = Some(eps);
-                    }
-                    Err(e) => {
-                        tracing::error!("endpoint discovery failed: {e}");
-                        self.model.discovered_endpoints = Some(Vec::new());
+            UiUpdate::EndpointsDiscovered { url, result } => {
+                if url != self.model.endpoint_url {
+                    tracing::debug!("dropping endpoints result for stale url {url}");
+                } else {
+                    self.model.endpoints_loading = false;
+                    match result {
+                        Ok(eps) => {
+                            tracing::info!("discovered {} endpoint(s)", eps.len());
+                            self.model.discovered_endpoints = Some(eps);
+                        }
+                        Err(e) => {
+                            tracing::error!("endpoint discovery failed: {e}");
+                            self.model.discovered_endpoints = Some(Vec::new());
+                        }
                     }
                 }
             }
@@ -187,7 +191,14 @@ impl UaApp {
 
     fn dispatch(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
-            UiAction::EndpointEdited(s) => self.model.endpoint_url = s,
+            UiAction::EndpointEdited(s) => {
+                if s != self.model.endpoint_url {
+                    self.model.endpoint_url = s;
+                    self.model.discovered_endpoints = None;
+                    self.model.selected_endpoint = None;
+                    self.model.endpoints_loading = false;
+                }
+            }
             UiAction::TabSelected(t) => {
                 self.model.active_tab = t;
                 if t == DetailTab::References {
@@ -380,7 +391,7 @@ impl UaApp {
                 .discover_endpoints(&url)
                 .await
                 .map_err(|e| e.to_string());
-            let _ = tx.send(UiUpdate::EndpointsDiscovered(r));
+            let _ = tx.send(UiUpdate::EndpointsDiscovered { url, result: r });
             ctx.request_repaint();
         });
     }

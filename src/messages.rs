@@ -47,7 +47,10 @@ pub enum UiUpdate {
         node: NodeId,
         refs: Result<Vec<ReferenceRow>, String>,
     },
-    EndpointsDiscovered(Result<Vec<EndpointInfo>, String>),
+    EndpointsDiscovered {
+        url: String,
+        result: Result<Vec<EndpointInfo>, String>,
+    },
     PathReady {
         node: NodeId,
         path: Result<String, String>,

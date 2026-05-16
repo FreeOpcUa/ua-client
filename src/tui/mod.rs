@@ -234,7 +234,7 @@ fn maybe_finish_quit(siv: &mut Cursive) {
     st.quit_scheduled = true;
     let sink = st.ctx.cb_sink.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
         let _ = sink.send(Box::new(|s: &mut Cursive| s.quit()));
     });
 }
@@ -390,7 +390,8 @@ fn build_log_view() -> impl cursive::view::View {
 }
 
 fn install_global_keys(siv: &mut Cursive) {
-    siv.add_global_callback(Event::CtrlChar('c'), request_quit);
+    siv.clear_global_callbacks(Event::CtrlChar('c'));
+    siv.set_on_pre_event(Event::CtrlChar('c'), request_quit);
     siv.add_global_callback('q', request_quit);
     siv.add_global_callback(Key::Esc, |s| dispatch_action(s, UiAction::ClearSelection));
     siv.add_global_callback('r', |s| dispatch_action(s, UiAction::RefreshClicked));

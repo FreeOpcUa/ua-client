@@ -25,7 +25,7 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
     };
     for (i, attr) in summary.attributes.iter().enumerate() {
         let id_salt = format!("attr_{i}_{}", attr.name);
-        egui::Frame::default()
+        let inner = egui::Frame::default()
             .stroke(egui::Stroke::new(1.0, stroke_color))
             .rounding(4.0)
             .inner_margin(egui::Margin::symmetric(6.0, 4.0))
@@ -34,6 +34,44 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
                 ui.set_min_width(ui.available_width());
                 draw_attribute(ui, &id_salt, attr, &node_id_str, &node_id, actions);
             });
+        let response = inner.response.interact(egui::Sense::click());
+        let value_text = value_tree_to_string(&attr.value);
+        let attr_name = attr.name.clone();
+        let is_node_id = attr.name == "NodeId";
+        let id_for_path = node_id.clone();
+        let mut copy_path_requested = false;
+        response.context_menu(|ui| {
+            if ui.button("Copy value").clicked() {
+                ui.output_mut(|o| o.copied_text = value_text.clone());
+                tracing::info!("copied {attr_name}: {value_text}");
+                ui.close_menu();
+            }
+            if is_node_id && ui.button("Copy Path").clicked() {
+                copy_path_requested = true;
+                ui.close_menu();
+            }
+        });
+        if copy_path_requested {
+            actions.push(UiAction::CopyPath(id_for_path));
+        }
+    }
+}
+
+fn value_tree_to_string(node: &ValueTree) -> String {
+    match node {
+        ValueTree::Null => "null".to_string(),
+        ValueTree::Leaf(s) => s.clone(),
+        ValueTree::Array(items) => {
+            let parts: Vec<String> = items.iter().map(value_tree_to_string).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        ValueTree::Object(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", value_tree_to_string(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
     }
 }
 
@@ -41,11 +79,10 @@ fn draw_attribute(
     ui: &mut egui::Ui,
     id_salt: &str,
     attr: &NodeAttribute,
-    node_id_str: &str,
-    node_id: &opcua::types::NodeId,
-    actions: &mut Vec<UiAction>,
+    _node_id_str: &str,
+    _node_id: &opcua::types::NodeId,
+    _actions: &mut Vec<UiAction>,
 ) {
-    let is_node_id = attr.name == "NodeId";
     match &attr.value {
         ValueTree::Null => {
             ui.horizontal(|ui| {
@@ -54,13 +91,10 @@ fn draw_attribute(
             });
         }
         ValueTree::Leaf(s) => {
-            let resp = ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
                 key_label(ui, &attr.name);
-                ui.add(egui::Label::new(s.as_str()).wrap()).rect
+                ui.add(egui::Label::new(s.as_str()).wrap());
             });
-            if is_node_id {
-                attach_node_id_menu(resp.response, node_id_str, node_id, actions);
-            }
         }
         complex => {
             draw_value_node(ui, id_salt, &attr.name, complex, 0);
@@ -121,27 +155,3 @@ fn key_label(ui: &mut egui::Ui, name: &str) {
     ui.add(egui::Label::new(":"));
 }
 
-fn attach_node_id_menu(
-    resp: egui::Response,
-    node_id_str: &str,
-    node_id: &opcua::types::NodeId,
-    actions: &mut Vec<UiAction>,
-) {
-    let id_string = node_id_str.to_string();
-    let id_clone = node_id.clone();
-    let mut copy_path = false;
-    resp.context_menu(|ui| {
-        if ui.button("Copy NodeId").clicked() {
-            ui.output_mut(|o| o.copied_text = id_string.clone());
-            tracing::info!("copied NodeId: {id_string}");
-            ui.close_menu();
-        }
-        if ui.button("Copy Path").clicked() {
-            copy_path = true;
-            ui.close_menu();
-        }
-    });
-    if copy_path {
-        actions.push(UiAction::CopyPath(id_clone));
-    }
-}

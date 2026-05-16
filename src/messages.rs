@@ -29,6 +29,7 @@ pub enum UiAction {
     PickAuthKeyPath,
     ConfirmConnect,
     CopyPath(NodeId),
+    ClearSelection,
 }
 
 #[derive(Debug)]

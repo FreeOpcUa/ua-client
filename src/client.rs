@@ -35,6 +35,12 @@ pub struct UaClient {
     state: Mutex<State>,
 }
 
+impl Default for UaClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UaClient {
     pub fn new() -> Self {
         Self {
@@ -628,12 +634,11 @@ fn attribute_status_ok(dv: &DataValue) -> bool {
 }
 
 fn format_attribute_value(attr: AttributeId, v: &Variant, session: &Session) -> ValueTree {
-    if matches!(attr, AttributeId::NodeClass) {
-        if let Variant::Int32(i) = v {
-            if let Ok(nc) = NodeClass::try_from(*i) {
-                return ValueTree::Leaf(format!("{nc:?}"));
-            }
-        }
+    if matches!(attr, AttributeId::NodeClass)
+        && let Variant::Int32(i) = v
+        && let Ok(nc) = NodeClass::try_from(*i)
+    {
+        return ValueTree::Leaf(format!("{nc:?}"));
     }
     variant_to_tree(session, v)
 }

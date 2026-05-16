@@ -3,11 +3,21 @@ use std::fmt::Write as _;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::Layer;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::messages::UiUpdate;
 use crate::types::{LogLevel, LogLine};
+
+pub fn init_tracing(tx: UnboundedSender<UiUpdate>) {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,opcua=info,ua_client=debug"));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(ChannelLogLayer::new(tx))
+        .init();
+}
 
 pub struct ChannelLogLayer {
     tx: UnboundedSender<UiUpdate>,

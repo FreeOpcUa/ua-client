@@ -8,93 +8,51 @@ use opcua::types::NodeId;
 use crate::client::UaClient;
 use crate::messages::{UiAction, UiUpdate};
 use crate::model::{AppModel, ConnectionState, DetailTab};
-
-pub struct UaApp {
-    model: AppModel,
-    client: Arc<UaClient>,
-    rt: Runtime,
-    update_tx: mpsc::UnboundedSender<UiUpdate>,
-    update_rx: mpsc::UnboundedReceiver<UiUpdate>,
-}
+use crate::types::{AuthSpec, EndpointInfo};
 
 #[derive(Debug, Clone, Copy)]
-enum FilePickTarget {
+pub enum FilePickTarget {
     CertPath,
     KeyPath,
 }
 
-const STORAGE_ENDPOINT_URL: &str = "endpoint_url";
-const STORAGE_ENDPOINT_HISTORY: &str = "endpoint_history";
-const STORAGE_AUTH_MODE: &str = "auth_mode";
-const STORAGE_AUTH_USERNAME: &str = "auth_username";
-const STORAGE_AUTH_CERT_PATH: &str = "auth_cert_path";
-const STORAGE_AUTH_KEY_PATH: &str = "auth_key_path";
-const STORAGE_LAST_SELECTIONS: &str = "last_selection_paths";
+pub trait FrontendCtx: Clone + Send + Sync + 'static {
+    fn request_repaint(&self);
+    fn set_clipboard(&self, text: &str);
+    fn pick_file(
+        &self,
+        rt: &Runtime,
+        update_tx: &mpsc::UnboundedSender<UiUpdate>,
+        target: FilePickTarget,
+        title: &str,
+        default_dir: &str,
+    );
+}
 
-impl UaApp {
+pub struct Engine {
+    pub model: AppModel,
+    pub client: Arc<UaClient>,
+    pub rt: Runtime,
+    pub update_tx: mpsc::UnboundedSender<UiUpdate>,
+}
+
+impl Engine {
     pub fn new(
         rt: Runtime,
         log_rx: mpsc::UnboundedReceiver<UiUpdate>,
-        storage: Option<&dyn eframe::Storage>,
-    ) -> Self {
+    ) -> (Self, mpsc::UnboundedReceiver<UiUpdate>) {
         let (update_tx, update_rx) = mpsc::unbounded_channel();
         forward_logs(log_rx, update_tx.clone());
-        let mut model = AppModel::default();
-        if let Some(s) = storage {
-            if let Some(url) = eframe::get_value::<String>(s, STORAGE_ENDPOINT_URL) {
-                model.endpoint_url = url;
-            }
-            if let Some(hist) = eframe::get_value::<Vec<String>>(s, STORAGE_ENDPOINT_HISTORY) {
-                model.endpoint_history = hist;
-            }
-            if let Some(m) = eframe::get_value::<String>(s, STORAGE_AUTH_MODE) {
-                model.auth_mode = match m.as_str() {
-                    "UserName" => crate::types::AuthMode::UserName,
-                    "Certificate" => crate::types::AuthMode::Certificate,
-                    _ => crate::types::AuthMode::Anonymous,
-                };
-            }
-            if let Some(s) = eframe::get_value::<String>(s, STORAGE_AUTH_USERNAME) {
-                model.auth_username = s;
-            }
-            if let Some(s2) = eframe::get_value::<String>(s, STORAGE_AUTH_CERT_PATH) {
-                model.auth_cert_path = s2;
-            }
-            if let Some(s2) = eframe::get_value::<String>(s, STORAGE_AUTH_KEY_PATH) {
-                model.auth_key_path = s2;
-            }
-            if let Some(stored) = eframe::get_value::<std::collections::HashMap<String, Vec<String>>>(
-                s,
-                STORAGE_LAST_SELECTIONS,
-            ) {
-                use std::str::FromStr;
-                for (url, ids) in stored {
-                    let path: Vec<opcua::types::NodeId> = ids
-                        .iter()
-                        .filter_map(|s| opcua::types::NodeId::from_str(s).ok())
-                        .collect();
-                    if !path.is_empty() {
-                        model.last_selection_paths.insert(url, path);
-                    }
-                }
-            }
-        }
-        Self {
-            model,
+        let engine = Self {
+            model: AppModel::default(),
             client: Arc::new(UaClient::new()),
             rt,
             update_tx,
-            update_rx,
-        }
+        };
+        (engine, update_rx)
     }
 
-    fn drain_updates(&mut self, ctx: &egui::Context) {
-        while let Ok(update) = self.update_rx.try_recv() {
-            self.apply_update(ctx, update);
-        }
-    }
-
-    fn apply_update(&mut self, ctx: &egui::Context, update: UiUpdate) {
+    pub fn apply_update<C: FrontendCtx>(&mut self, ctx: &C, update: UiUpdate) {
         match update {
             UiUpdate::ConnectStarted => self.model.connection = ConnectionState::Connecting,
             UiUpdate::ConnectFinished(Ok(())) => {
@@ -169,7 +127,7 @@ impl UaApp {
             }
             UiUpdate::PathReady { node, path } => match path {
                 Ok(p) => {
-                    ctx.output_mut(|o| o.copied_text = p.clone());
+                    ctx.set_clipboard(&p);
                     tracing::info!("copied path: {p}");
                 }
                 Err(e) => tracing::error!("path for {node} failed: {e}"),
@@ -199,7 +157,7 @@ impl UaApp {
         }
     }
 
-    fn dispatch(&mut self, ctx: &egui::Context, action: UiAction) {
+    pub fn dispatch<C: FrontendCtx>(&mut self, ctx: &C, action: UiAction) {
         match action {
             UiAction::EndpointEdited(s) => {
                 if s != self.model.endpoint_url {
@@ -211,12 +169,12 @@ impl UaApp {
             }
             UiAction::TabSelected(t) => {
                 self.model.active_tab = t;
-                if t == DetailTab::References {
-                    if let Some(node) = self.model.selected.clone() {
-                        if self.model.references.is_none() && !self.model.references_loading {
-                            self.spawn_browse_references(ctx, node);
-                        }
-                    }
+                if t == DetailTab::References
+                    && let Some(node) = self.model.selected.clone()
+                    && self.model.references.is_none()
+                    && !self.model.references_loading
+                {
+                    self.spawn_browse_references(ctx, node);
                 }
             }
             UiAction::ConnectClicked => {
@@ -236,6 +194,12 @@ impl UaApp {
             UiAction::DisconnectClicked => self.spawn_disconnect(ctx),
             UiAction::NodeToggleExpand(n) => self.toggle_expand(ctx, n),
             UiAction::NodeSelected(n) => self.select_node(ctx, n),
+            UiAction::ClearSelection => {
+                self.model.selected = None;
+                self.model.node_summary = None;
+                self.model.references = None;
+                self.model.references_loading = false;
+            }
             UiAction::RefreshClicked => {
                 if let Some(node) = self.model.selected.clone() {
                     self.spawn_node_summary(ctx, node.clone());
@@ -273,13 +237,27 @@ impl UaApp {
             UiAction::PickAuthCertPath => {
                 if !self.model.file_picker_open {
                     self.model.file_picker_open = true;
-                    self.spawn_pick_file(ctx, FilePickTarget::CertPath);
+                    let default_dir = self.model.auth_cert_path.clone();
+                    ctx.pick_file(
+                        &self.rt,
+                        &self.update_tx,
+                        FilePickTarget::CertPath,
+                        "Pick client certificate",
+                        &default_dir,
+                    );
                 }
             }
             UiAction::PickAuthKeyPath => {
                 if !self.model.file_picker_open {
                     self.model.file_picker_open = true;
-                    self.spawn_pick_file(ctx, FilePickTarget::KeyPath);
+                    let default_dir = self.model.auth_key_path.clone();
+                    ctx.pick_file(
+                        &self.rt,
+                        &self.update_tx,
+                        FilePickTarget::KeyPath,
+                        "Pick private key",
+                        &default_dir,
+                    );
                 }
             }
             UiAction::CopyPath(node) => self.spawn_browse_path(ctx, node),
@@ -294,7 +272,7 @@ impl UaApp {
         }
     }
 
-    fn toggle_expand(&mut self, ctx: &egui::Context, node: NodeId) {
+    fn toggle_expand<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {
         if self.model.tree.expanded.contains(&node) {
             self.model.tree.expanded.remove(&node);
         } else if self.model.tree.children.contains_key(&node) {
@@ -305,7 +283,7 @@ impl UaApp {
         }
     }
 
-    fn ensure_expanded(&mut self, ctx: &egui::Context, node: NodeId) {
+    fn ensure_expanded<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {
         if self.model.tree.expanded.contains(&node) {
             return;
         }
@@ -317,7 +295,7 @@ impl UaApp {
         }
     }
 
-    fn select_node(&mut self, ctx: &egui::Context, node: NodeId) {
+    fn select_node<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {
         self.model.selected = Some(node.clone());
         self.model.node_summary = None;
         self.model.references = None;
@@ -328,7 +306,25 @@ impl UaApp {
         self.spawn_resolve_path(ctx, node);
     }
 
-    fn spawn_resolve_path(&self, ctx: &egui::Context, node: NodeId) {
+    fn select_first_matching_endpoint(&mut self) {
+        if let Some(eps) = self.model.discovered_endpoints.as_ref() {
+            let mut filtered: Vec<&EndpointInfo> = eps
+                .iter()
+                .filter(|e| e.security_mode == self.model.endpoint_mode_filter)
+                .collect();
+            filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+            self.model.selected_endpoint = filtered.first().map(|&e| e.clone());
+        }
+    }
+
+    fn open_endpoint_picker<C: FrontendCtx>(&mut self, ctx: &C) {
+        self.model.endpoints_dialog_open = true;
+        if self.model.discovered_endpoints.is_none() && !self.model.endpoints_loading {
+            self.spawn_discover_endpoints(ctx);
+        }
+    }
+
+    fn spawn_resolve_path<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let url = self.model.endpoint_url.clone();
@@ -344,7 +340,7 @@ impl UaApp {
         });
     }
 
-    fn spawn_restore_selection(&self, ctx: &egui::Context, path: Vec<NodeId>) {
+    fn spawn_restore_selection<C: FrontendCtx>(&self, ctx: &C, path: Vec<NodeId>) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
@@ -373,12 +369,12 @@ impl UaApp {
         });
     }
 
-    fn spawn_connect(&mut self, ctx: &egui::Context) {
+    fn spawn_connect<C: FrontendCtx>(&mut self, ctx: &C) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let url = self.model.endpoint_url.clone();
         let endpoint = self.model.selected_endpoint.clone();
-        let auth = crate::types::AuthSpec {
+        let auth = AuthSpec {
             mode: self.model.auth_mode,
             username: self.model.auth_username.clone(),
             password: self.model.auth_password.clone(),
@@ -397,58 +393,7 @@ impl UaApp {
         });
     }
 
-    fn select_first_matching_endpoint(&mut self) {
-        if let Some(eps) = self.model.discovered_endpoints.as_ref() {
-            let mut filtered: Vec<&crate::types::EndpointInfo> = eps
-                .iter()
-                .filter(|e| e.security_mode == self.model.endpoint_mode_filter)
-                .collect();
-            filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
-            self.model.selected_endpoint = filtered.first().map(|&e| e.clone());
-        }
-    }
-
-    fn open_endpoint_picker(&mut self, ctx: &egui::Context) {
-        self.model.endpoints_dialog_open = true;
-        if self.model.discovered_endpoints.is_none() && !self.model.endpoints_loading {
-            self.spawn_discover_endpoints(ctx);
-        }
-    }
-
-    fn spawn_pick_file(&self, ctx: &egui::Context, target: FilePickTarget) {
-        let tx = self.update_tx.clone();
-        let ctx = ctx.clone();
-        let (title, default_dir) = match target {
-            FilePickTarget::CertPath => (
-                "Pick client certificate",
-                self.model.auth_cert_path.clone(),
-            ),
-            FilePickTarget::KeyPath => (
-                "Pick private key",
-                self.model.auth_key_path.clone(),
-            ),
-        };
-        self.rt.spawn_blocking(move || {
-            let mut dlg = rfd::FileDialog::new().set_title(title);
-            if let Some(parent) = std::path::Path::new(&default_dir).parent() {
-                if parent.exists() {
-                    dlg = dlg.set_directory(parent);
-                }
-            }
-            if let Some(path) = dlg.pick_file() {
-                let s = path.to_string_lossy().into_owned();
-                let update = match target {
-                    FilePickTarget::CertPath => UiUpdate::CertPathPicked(s),
-                    FilePickTarget::KeyPath => UiUpdate::KeyPathPicked(s),
-                };
-                let _ = tx.send(update);
-            }
-            let _ = tx.send(UiUpdate::FilePickerClosed);
-            ctx.request_repaint();
-        });
-    }
-
-    fn spawn_discover_endpoints(&mut self, ctx: &egui::Context) {
+    fn spawn_discover_endpoints<C: FrontendCtx>(&mut self, ctx: &C) {
         self.model.endpoints_loading = true;
         self.model.discovered_endpoints = None;
         let client = self.client.clone();
@@ -465,7 +410,7 @@ impl UaApp {
         });
     }
 
-    fn spawn_disconnect(&mut self, ctx: &egui::Context) {
+    fn spawn_disconnect<C: FrontendCtx>(&self, ctx: &C) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
@@ -479,7 +424,7 @@ impl UaApp {
         });
     }
 
-    fn spawn_browse_children(&self, ctx: &egui::Context, node: NodeId) {
+    fn spawn_browse_children<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
@@ -493,7 +438,7 @@ impl UaApp {
         });
     }
 
-    fn spawn_node_summary(&self, ctx: &egui::Context, node: NodeId) {
+    fn spawn_node_summary<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
@@ -502,15 +447,12 @@ impl UaApp {
                 .read_node_summary(&node)
                 .await
                 .map_err(|e| e.to_string());
-            let _ = tx.send(UiUpdate::SummaryLoaded {
-                node,
-                summary: r,
-            });
+            let _ = tx.send(UiUpdate::SummaryLoaded { node, summary: r });
             ctx.request_repaint();
         });
     }
 
-    fn spawn_browse_path(&self, ctx: &egui::Context, node: NodeId) {
+    fn spawn_browse_path<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();
         let ctx = ctx.clone();
@@ -521,7 +463,7 @@ impl UaApp {
         });
     }
 
-    fn spawn_browse_references(&mut self, ctx: &egui::Context, node: NodeId) {
+    fn spawn_browse_references<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {
         self.model.references_loading = true;
         let client = self.client.clone();
         let tx = self.update_tx.clone();
@@ -548,40 +490,4 @@ fn forward_logs(
             }
         }
     });
-}
-
-impl eframe::App for UaApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_updates(ctx);
-        let mut actions = Vec::new();
-        crate::ui::draw(&self.model, ctx, &mut actions);
-        for action in actions {
-            self.dispatch(ctx, action);
-        }
-    }
-
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, STORAGE_ENDPOINT_URL, &self.model.endpoint_url);
-        eframe::set_value(
-            storage,
-            STORAGE_ENDPOINT_HISTORY,
-            &self.model.endpoint_history,
-        );
-        let auth_mode_str = match self.model.auth_mode {
-            crate::types::AuthMode::Anonymous => "Anonymous",
-            crate::types::AuthMode::UserName => "UserName",
-            crate::types::AuthMode::Certificate => "Certificate",
-        };
-        eframe::set_value(storage, STORAGE_AUTH_MODE, &auth_mode_str.to_string());
-        eframe::set_value(storage, STORAGE_AUTH_USERNAME, &self.model.auth_username);
-        eframe::set_value(storage, STORAGE_AUTH_CERT_PATH, &self.model.auth_cert_path);
-        eframe::set_value(storage, STORAGE_AUTH_KEY_PATH, &self.model.auth_key_path);
-        let paths: std::collections::HashMap<String, Vec<String>> = self
-            .model
-            .last_selection_paths
-            .iter()
-            .map(|(url, path)| (url.clone(), path.iter().map(|n| n.to_string()).collect()))
-            .collect();
-        eframe::set_value(storage, STORAGE_LAST_SELECTIONS, &paths);
-    }
 }

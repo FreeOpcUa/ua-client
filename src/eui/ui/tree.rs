@@ -40,14 +40,14 @@ fn draw_root(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         }
     });
 
-    if expanded {
-        if let Some(children) = model.tree.children.get(&root_id) {
-            ui.indent("root_children", |ui| {
-                for child in children {
-                    draw_child(model, ui, actions, child, 1);
-                }
-            });
-        }
+    if expanded
+        && let Some(children) = model.tree.children.get(&root_id)
+    {
+        ui.indent("root_children", |ui| {
+            for child in children {
+                draw_child(model, ui, actions, child, 1);
+            }
+        });
     }
 }
 
@@ -89,15 +89,16 @@ fn draw_child(
         }
     });
 
-    if expanded && child.has_children {
-        if let Some(grandkids) = model.tree.children.get(id) {
-            let indent_id = format!("kids_{}_{}", depth, node_id_key(id));
-            ui.indent(indent_id, |ui| {
-                for gk in grandkids {
-                    draw_child(model, ui, actions, gk, depth + 1);
-                }
-            });
-        }
+    if expanded
+        && child.has_children
+        && let Some(grandkids) = model.tree.children.get(id)
+    {
+        let indent_id = format!("kids_{}_{}", depth, node_id_key(id));
+        ui.indent(indent_id, |ui| {
+            for gk in grandkids {
+                draw_child(model, ui, actions, gk, depth + 1);
+            }
+        });
     }
 }
 

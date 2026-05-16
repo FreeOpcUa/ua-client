@@ -10,12 +10,20 @@ license = "MIT"
 keywords = ["client", "egui", "gui", "opc-ua", "opcua"]
 categories = ["gui", "network-programming"]
 
+[features]
+default = ["tui"]
+tui = ["dep:cursive", "dep:arboard"]
+
 [dependencies]
 anyhow = "1"
+arboard = { version = "3", optional = true }
 async-opcua = { version = "0.18", default-features = false, features = [
   "client",
   "json"
 ] }
+cursive = { version = "0.21", default-features = false, features = [
+  "crossterm-backend"
+], optional = true }
 eframe = { version = "0.30", default-features = false, features = [
   "default_fonts",
   "glow",
@@ -36,3 +44,7 @@ tokio = { version = "1", features = [
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "ua-tui"
+required-features = ["tui"]

@@ -186,6 +186,7 @@ impl UaApp {
                         Ok(eps) => {
                             tracing::info!("discovered {} endpoint(s)", eps.len());
                             self.model.discovered_endpoints = Some(eps);
+                            self.select_first_matching_endpoint();
                         }
                         Err(e) => {
                             tracing::error!("endpoint discovery failed: {e}");
@@ -261,7 +262,10 @@ impl UaApp {
                 self.model.selected_endpoint = None;
             }
             UiAction::SetAuthMode(mode) => self.model.auth_mode = mode,
-            UiAction::SetEndpointModeFilter(mode) => self.model.endpoint_mode_filter = mode,
+            UiAction::SetEndpointModeFilter(mode) => {
+                self.model.endpoint_mode_filter = mode;
+                self.select_first_matching_endpoint();
+            }
             UiAction::AuthUsernameEdited(s) => self.model.auth_username = s,
             UiAction::AuthPasswordEdited(s) => self.model.auth_password = s,
             UiAction::AuthCertPathEdited(s) => self.model.auth_cert_path = s,
@@ -391,6 +395,17 @@ impl UaApp {
             let _ = tx.send(UiUpdate::ConnectFinished(r));
             ctx.request_repaint();
         });
+    }
+
+    fn select_first_matching_endpoint(&mut self) {
+        if let Some(eps) = self.model.discovered_endpoints.as_ref() {
+            let mut filtered: Vec<&crate::types::EndpointInfo> = eps
+                .iter()
+                .filter(|e| e.security_mode == self.model.endpoint_mode_filter)
+                .collect();
+            filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+            self.model.selected_endpoint = filtered.first().map(|&e| e.clone());
+        }
     }
 
     fn open_endpoint_picker(&mut self, ctx: &egui::Context) {

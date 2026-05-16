@@ -352,13 +352,16 @@ async fn read_inverse_parent(session: &Session, node_id: &NodeId) -> Result<Opti
         result_mask: BrowseDescriptionResultMask::all().bits(),
     };
     let mut results = session
-        .browse(&[desc], 1, None)
+        .browse(&[desc], 0, None)
         .await
         .map_err(|s| anyhow!("browse inverse failed: {s}"))?;
     let parent = results
         .pop()
         .and_then(|r| r.references)
-        .and_then(|refs| refs.into_iter().next())
+        .and_then(|refs| {
+            refs.into_iter()
+                .find(|rd| !is_excluded_tree_reference(&rd.reference_type_id))
+        })
         .map(|r| r.node_id.node_id);
     Ok(parent)
 }

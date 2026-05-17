@@ -76,6 +76,9 @@ KEYBOARD SHORTCUTS (inside the TUI):
     Enter              Select node (expands/collapses if it has children)
     Esc                Clear current selection
     r                  Refresh selected node
+    p                  Copy browse path of selected node
+    n                  Copy NodeId of selected node
+    v                  Copy Value attribute of selected node
     q / Ctrl+C         Quit (disconnects cleanly first)
     ?                  Show in-app help"
     );

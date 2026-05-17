@@ -79,6 +79,7 @@ pub fn run(
         pending_quit: false,
         quit_scheduled: false,
         last_connection: ConnectionState::Disconnected,
+        last_applied_selection: None,
         cli_path: args.path,
     });
     dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
@@ -109,6 +110,7 @@ struct TuiState {
     pending_quit: bool,
     quit_scheduled: bool,
     last_connection: ConnectionState,
+    last_applied_selection: Option<NodeId>,
     cli_path: Option<String>,
 }
 
@@ -409,7 +411,27 @@ fn install_global_keys(siv: &mut Cursive) {
     siv.add_global_callback('q', request_quit);
     siv.add_global_callback(Key::Esc, |s| dispatch_action(s, UiAction::ClearSelection));
     siv.add_global_callback('r', |s| dispatch_action(s, UiAction::RefreshClicked));
+    siv.add_global_callback('p', |s| {
+        if let Some(node) = current_selection(s) {
+            dispatch_action(s, UiAction::CopyPath(node));
+        } else {
+            tracing::warn!("no node selected; nothing to copy");
+        }
+    });
+    siv.add_global_callback('n', |s| {
+        if let Some(node) = current_selection(s) {
+            dispatch_action(s, UiAction::CopyNodeId(node));
+        } else {
+            tracing::warn!("no node selected; nothing to copy");
+        }
+    });
+    siv.add_global_callback('v', |s| dispatch_action(s, UiAction::CopyNodeValue));
     siv.add_global_callback('?', show_help);
+}
+
+fn current_selection(siv: &mut Cursive) -> Option<NodeId> {
+    siv.user_data::<TuiState>()
+        .and_then(|st| st.engine.model.selected.clone())
 }
 
 fn show_help(siv: &mut Cursive) {
@@ -420,6 +442,13 @@ Navigation:
   Enter              Select node (and expand/collapse if it has children)
   Esc                Clear selection
   r                  Refresh selected node
+
+Copy to clipboard (selected node):
+  p                  Copy browse path (e.g. /Objects/Server)
+  n                  Copy NodeId (e.g. ns=1;i=1234)
+  v                  Copy Value attribute
+
+Other:
   q / Ctrl+C         Quit (disconnects cleanly first)
   ?                  This help";
     siv.add_layer(Dialog::info(body).title("Keys"));
@@ -550,25 +579,39 @@ fn refresh_url(siv: &mut Cursive, snap: &ModelSnapshot) {
 }
 
 fn refresh_tree(siv: &mut Cursive, snap: &ModelSnapshot) {
+    let last_applied = siv
+        .user_data::<TuiState>()
+        .and_then(|st| st.last_applied_selection.clone());
     let preserved_id = siv
         .call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
             v.selection().map(|arc| arc.node_id.clone())
         })
         .flatten();
+
+    // Auto-jump the cursor only when model.selected has *changed* since the
+    // last refresh. Otherwise keep the SelectView's current cursor — so j/k
+    // navigation isn't yanked back to the selected node by every log line.
+    let target = if snap.selected != last_applied && snap.selected.is_some() {
+        snap.selected.clone()
+    } else {
+        preserved_id
+    };
+
     siv.call_on_name(ID_TREE, |v: &mut SelectView<TreeItem>| {
         v.clear();
         for row in &snap.tree_rows {
             v.add_item(row.label.clone(), row.item.clone());
         }
-        if let Some(target) = preserved_id.as_ref()
-            && let Some(idx) = snap
-                .tree_rows
-                .iter()
-                .position(|r| &r.item.node_id == target)
+        if let Some(t) = target.as_ref()
+            && let Some(idx) = snap.tree_rows.iter().position(|r| &r.item.node_id == t)
         {
             v.set_selection(idx);
         }
     });
+
+    if let Some(st) = siv.user_data::<TuiState>() {
+        st.last_applied_selection = snap.selected.clone();
+    }
 }
 
 fn refresh_attrs(siv: &mut Cursive, snap: &ModelSnapshot) {

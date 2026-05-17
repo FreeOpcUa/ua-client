@@ -8,11 +8,10 @@ use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
 use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
-    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, BrowsePath,
-    DataValue, EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask,
-    NodeId, QualifiedName, ReadValueId, ReferenceDescription, ReferenceTypeId, RelativePath,
-    RelativePathElement, StatusCode, TimestampsToReturn, TypeLoader, UserTokenPolicy,
-    UserTokenType, Variant,
+    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, DataValue,
+    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
+    QualifiedName, ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode,
+    TimestampsToReturn, TypeLoader, UserTokenPolicy, UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -190,49 +189,42 @@ impl UaClient {
     }
 
     /// Resolve a textual browse path like "/Objects/Server/ServerStatus" into
-    /// the matching NodeId, walking down from RootFolder. Segments may be plain
-    /// names (namespace 0) or "ns=N:Name".
+    /// the matching NodeId by walking hierarchical references from RootFolder.
+    /// A leading "Root" segment is accepted as a no-op. Segments may be plain
+    /// names (namespace 0) or "N:Name" for explicit namespaces.
     pub async fn resolve_browse_path(&self, text: &str) -> Result<NodeId> {
         let session = self.session().await?;
         let root = NodeId::new(0, opcua::types::ObjectId::RootFolder as u32);
 
-        let segments: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+        let mut segments: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+        if segments
+            .first()
+            .is_some_and(|s| s.eq_ignore_ascii_case("Root"))
+        {
+            segments.remove(0);
+        }
         if segments.is_empty() {
             return Ok(root);
         }
 
-        let elements: Vec<RelativePathElement> = segments
-            .iter()
-            .map(|seg| RelativePathElement {
-                reference_type_id: ReferenceTypeId::HierarchicalReferences.into(),
-                is_inverse: false,
-                include_subtypes: true,
-                target_name: parse_qualified_name(seg),
-            })
-            .collect();
-
-        let results = session
-            .translate_browse_paths_to_node_ids(&[BrowsePath {
-                starting_node: root,
-                relative_path: RelativePath {
-                    elements: Some(elements),
-                },
-            }])
-            .await
-            .map_err(|e| anyhow!("translate_browse_paths failed: {e}"))?;
-
-        let r = results
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("translate_browse_paths returned no result"))?;
-        if !r.status_code.is_good() {
-            return Err(anyhow!("path resolution status: {}", r.status_code));
+        let mut current = root;
+        let mut walked = String::new();
+        for seg in &segments {
+            let target = parse_qualified_name(seg);
+            match find_child_by_browse_name(&session, &current, &target).await? {
+                Some(next) => {
+                    walked.push('/');
+                    walked.push_str(seg);
+                    current = next;
+                }
+                None => {
+                    return Err(anyhow!(
+                        "no child '{seg}' under {current} (resolved {walked} so far)"
+                    ));
+                }
+            }
         }
-        let target = r
-            .targets
-            .and_then(|mut t| t.pop())
-            .ok_or_else(|| anyhow!("no target nodes returned"))?;
-        Ok(target.target_id.node_id)
+        Ok(current)
     }
 
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
@@ -775,12 +767,43 @@ fn json_to_tree(v: &serde_json::Value) -> ValueTree {
     }
 }
 
+async fn find_child_by_browse_name(
+    session: &Session,
+    parent: &NodeId,
+    target: &QualifiedName,
+) -> Result<Option<NodeId>> {
+    let desc = browse_hierarchical(parent.clone());
+    let mut results = session
+        .browse(&[desc], 0, None)
+        .await
+        .map_err(|s| anyhow!("browse failed: {s}"))?;
+    let refs = results
+        .pop()
+        .and_then(|r| r.references)
+        .unwrap_or_default();
+    for r in refs {
+        if is_excluded_tree_reference(&r.reference_type_id) {
+            continue;
+        }
+        if r.browse_name.namespace_index == target.namespace_index
+            && r.browse_name.name.as_ref() == target.name.as_ref()
+        {
+            return Ok(Some(r.node_id.node_id));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse one path segment as a QualifiedName.
+///
+/// Accepted forms: `Name` (namespace 0), `N:Name` (namespace N — what
+/// `browse_path` emits), `ns=N:Name` (explicit prefix).
 fn parse_qualified_name(segment: &str) -> QualifiedName {
-    if let Some(rest) = segment.strip_prefix("ns=")
-        && let Some((ns_str, name)) = rest.split_once(':')
-        && let Ok(ns) = ns_str.parse::<u16>()
+    let body = segment.strip_prefix("ns=").unwrap_or(segment);
+    if let Some((head, rest)) = body.split_once(':')
+        && let Ok(ns) = head.parse::<u16>()
     {
-        return QualifiedName::new(ns, name);
+        return QualifiedName::new(ns, rest);
     }
     QualifiedName::new(0, segment)
 }

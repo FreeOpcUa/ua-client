@@ -8,7 +8,7 @@ use opcua::types::NodeId;
 use crate::client::UaClient;
 use crate::messages::{UiAction, UiUpdate};
 use crate::model::{AppModel, ConnectionState, DetailTab};
-use crate::types::{AuthSpec, EndpointInfo};
+use crate::types::{AuthSpec, EndpointInfo, ValueTree};
 
 #[derive(Debug, Clone, Copy)]
 pub enum FilePickTarget {
@@ -261,6 +261,28 @@ impl Engine {
                 }
             }
             UiAction::CopyPath(node) => self.spawn_browse_path(ctx, node),
+            UiAction::CopyNodeId(node) => {
+                let text = node.to_string();
+                ctx.set_clipboard(&text);
+                tracing::info!("copied node id: {text}");
+            }
+            UiAction::CopyNodeValue => {
+                let Some(summary) = self.model.node_summary.as_ref() else {
+                    tracing::warn!("no node summary loaded; nothing to copy");
+                    return;
+                };
+                match summary.attributes.iter().find(|a| a.name == "Value") {
+                    Some(attr) => {
+                        let text = render_value_for_clipboard(&attr.value);
+                        ctx.set_clipboard(&text);
+                        tracing::info!("copied value of {}", summary.node_id);
+                    }
+                    None => tracing::warn!(
+                        "selected node {} has no Value attribute",
+                        summary.node_id
+                    ),
+                }
+            }
             UiAction::ConfirmConnect => {
                 if self.model.selected_endpoint.is_some() {
                     self.model.endpoints_dialog_open = false;
@@ -520,6 +542,44 @@ impl Engine {
             ctx.request_repaint();
         });
     }
+}
+
+fn render_value_for_clipboard(value: &ValueTree) -> String {
+    use std::fmt::Write as _;
+    fn render(v: &ValueTree, indent: usize, out: &mut String) {
+        let pad = "  ".repeat(indent);
+        match v {
+            ValueTree::Null => {
+                let _ = write!(out, "{pad}<null>");
+            }
+            ValueTree::Leaf(s) => {
+                let _ = write!(out, "{pad}{s}");
+            }
+            ValueTree::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    let _ = write!(out, "{pad}[{i}]");
+                    out.push('\n');
+                    render(item, indent + 1, out);
+                }
+            }
+            ValueTree::Object(fields) => {
+                for (i, (k, val)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    let _ = write!(out, "{pad}{k}:");
+                    out.push('\n');
+                    render(val, indent + 1, out);
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    render(value, 0, &mut out);
+    out
 }
 
 fn forward_logs(

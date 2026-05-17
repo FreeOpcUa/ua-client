@@ -1,3 +1,4 @@
+pub mod args;
 mod focus_frame;
 mod focus_gate;
 mod persist;
@@ -19,6 +20,7 @@ use opcua::types::NodeId;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
+use args::Args;
 use focus_frame::FocusFrame;
 use focus_gate::FocusGate;
 
@@ -46,6 +48,7 @@ const ID_REFS_GATE: &str = "refs_gate";
 pub fn run(
     mut engine: Engine,
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
+    args: Args,
 ) -> anyhow::Result<()> {
     let saved = persist::load();
     if let Some(url) = saved.endpoint_url {
@@ -54,6 +57,12 @@ pub fn run(
     if !saved.endpoint_history.is_empty() {
         engine.model.endpoint_history = saved.endpoint_history;
     }
+    if let Some(url) = args.url.as_ref() {
+        engine.model.endpoint_url = url.clone();
+        // CLI override beats saved selection
+        engine.model.last_selection_paths.remove(url);
+    }
+    let auto_connect = args.url.is_some() || args.path.is_some();
 
     let mut siv = cursive::default();
     siv.set_theme(make_theme());
@@ -70,9 +79,13 @@ pub fn run(
         pending_quit: false,
         quit_scheduled: false,
         last_connection: ConnectionState::Disconnected,
+        cli_path: args.path,
     });
     dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(&mut siv);
+    if auto_connect {
+        dispatch_action(&mut siv, UiAction::ConnectClicked);
+    }
 
     siv.run();
     save_state(&mut siv);
@@ -96,6 +109,7 @@ struct TuiState {
     pending_quit: bool,
     quit_scheduled: bool,
     last_connection: ConnectionState,
+    cli_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -464,6 +478,15 @@ fn track_connection_change(siv: &mut Cursive) {
         ConnectionState::Connected => ID_TREE,
     };
     siv.focus_name(target).ok();
+
+    if current == ConnectionState::Connected {
+        let st = siv.user_data::<TuiState>().unwrap();
+        if let Some(path) = st.cli_path.take() {
+            tracing::info!("navigating to --path {path}");
+            let ctx = st.ctx.clone();
+            st.engine.navigate_to_textual_path(&ctx, path);
+        }
+    }
 }
 
 struct ModelSnapshot {

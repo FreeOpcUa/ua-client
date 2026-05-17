@@ -340,6 +340,49 @@ impl Engine {
         });
     }
 
+    pub fn navigate_to_textual_path<C: FrontendCtx>(&self, ctx: &C, path: String) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let target = match client.resolve_browse_path(&path).await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("resolve path '{path}' failed: {e}");
+                    return;
+                }
+            };
+            let chain = match client.node_path(&target).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("node_path for '{path}' failed: {e}");
+                    return;
+                }
+            };
+            if chain.is_empty() {
+                return;
+            }
+            let final_target = chain.last().cloned().unwrap();
+            for parent in chain.iter().take(chain.len() - 1) {
+                match client.browse_children(parent).await {
+                    Ok(children) => {
+                        let _ = tx.send(UiUpdate::ChildrenLoaded {
+                            parent: parent.clone(),
+                            children: Ok(children),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("navigate: browse_children({parent}) failed: {e}");
+                        ctx.request_repaint();
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(UiUpdate::RestoreSelection(final_target));
+            ctx.request_repaint();
+        });
+    }
+
     fn spawn_restore_selection<C: FrontendCtx>(&self, ctx: &C, path: Vec<NodeId>) {
         let client = self.client.clone();
         let tx = self.update_tx.clone();

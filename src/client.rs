@@ -8,10 +8,11 @@ use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
 use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
-    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, DataValue,
-    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
-    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, TypeLoader,
-    UserTokenPolicy, UserTokenType, Variant,
+    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, BrowsePath,
+    DataValue, EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask,
+    NodeId, QualifiedName, ReadValueId, ReferenceDescription, ReferenceTypeId, RelativePath,
+    RelativePathElement, StatusCode, TimestampsToReturn, TypeLoader, UserTokenPolicy,
+    UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -186,6 +187,52 @@ impl UaClient {
         }
         path.reverse();
         Ok(path)
+    }
+
+    /// Resolve a textual browse path like "/Objects/Server/ServerStatus" into
+    /// the matching NodeId, walking down from RootFolder. Segments may be plain
+    /// names (namespace 0) or "ns=N:Name".
+    pub async fn resolve_browse_path(&self, text: &str) -> Result<NodeId> {
+        let session = self.session().await?;
+        let root = NodeId::new(0, opcua::types::ObjectId::RootFolder as u32);
+
+        let segments: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+        if segments.is_empty() {
+            return Ok(root);
+        }
+
+        let elements: Vec<RelativePathElement> = segments
+            .iter()
+            .map(|seg| RelativePathElement {
+                reference_type_id: ReferenceTypeId::HierarchicalReferences.into(),
+                is_inverse: false,
+                include_subtypes: true,
+                target_name: parse_qualified_name(seg),
+            })
+            .collect();
+
+        let results = session
+            .translate_browse_paths_to_node_ids(&[BrowsePath {
+                starting_node: root,
+                relative_path: RelativePath {
+                    elements: Some(elements),
+                },
+            }])
+            .await
+            .map_err(|e| anyhow!("translate_browse_paths failed: {e}"))?;
+
+        let r = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("translate_browse_paths returned no result"))?;
+        if !r.status_code.is_good() {
+            return Err(anyhow!("path resolution status: {}", r.status_code));
+        }
+        let target = r
+            .targets
+            .and_then(|mut t| t.pop())
+            .ok_or_else(|| anyhow!("no target nodes returned"))?;
+        Ok(target.target_id.node_id)
     }
 
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
@@ -726,6 +773,16 @@ fn json_to_tree(v: &serde_json::Value) -> ValueTree {
                 .collect(),
         ),
     }
+}
+
+fn parse_qualified_name(segment: &str) -> QualifiedName {
+    if let Some(rest) = segment.strip_prefix("ns=")
+        && let Some((ns_str, name)) = rest.split_once(':')
+        && let Ok(ns) = ns_str.parse::<u16>()
+    {
+        return QualifiedName::new(ns, name);
+    }
+    QualifiedName::new(0, segment)
 }
 
 async fn register_dynamic_type_loader(session: &Session) -> Result<()> {

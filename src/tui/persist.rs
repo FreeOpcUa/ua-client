@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,11 @@ pub struct SavedState {
     pub endpoint_url: Option<String>,
     #[serde(default)]
     pub endpoint_history: Vec<String>,
+    /// Map of endpoint URL → ancestor chain of the last node the user selected.
+    /// NodeIds are stored in their textual form (`NodeId::to_string`) so the
+    /// file is human-readable and stable across serde versions.
+    #[serde(default)]
+    pub last_selection_paths: HashMap<String, Vec<String>>,
 }
 
 pub fn load() -> SavedState {

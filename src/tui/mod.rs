@@ -59,6 +59,16 @@ pub fn run(
     if !saved.endpoint_history.is_empty() {
         engine.model.endpoint_history = saved.endpoint_history;
     }
+    for (url, ids) in saved.last_selection_paths {
+        use std::str::FromStr;
+        let path: Vec<NodeId> = ids
+            .iter()
+            .filter_map(|s| NodeId::from_str(s).ok())
+            .collect();
+        if !path.is_empty() {
+            engine.model.last_selection_paths.insert(url, path);
+        }
+    }
     if let Some(url) = args.url.as_ref() {
         engine.model.endpoint_url = url.clone();
         // CLI override beats saved selection
@@ -101,9 +111,17 @@ fn save_state(siv: &mut Cursive) {
     let Some(st) = siv.user_data::<TuiState>() else {
         return;
     };
+    let paths: std::collections::HashMap<String, Vec<String>> = st
+        .engine
+        .model
+        .last_selection_paths
+        .iter()
+        .map(|(url, path)| (url.clone(), path.iter().map(|n| n.to_string()).collect()))
+        .collect();
     persist::save(&persist::SavedState {
         endpoint_url: Some(st.engine.model.endpoint_url.clone()),
         endpoint_history: st.engine.model.endpoint_history.clone(),
+        last_selection_paths: paths,
     });
 }
 

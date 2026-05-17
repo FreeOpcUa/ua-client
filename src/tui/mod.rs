@@ -1,4 +1,5 @@
 pub mod args;
+mod endpoint_dialog;
 mod focus_frame;
 mod focus_gate;
 mod persist;
@@ -82,6 +83,7 @@ pub fn run(
         last_connection: ConnectionState::Disconnected,
         last_applied_selection: None,
         cli_path: args.path,
+        dialog_open: false,
     });
     dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(&mut siv);
@@ -105,18 +107,19 @@ fn save_state(siv: &mut Cursive) {
     });
 }
 
-struct TuiState {
-    engine: Engine,
-    ctx: CursiveCtx,
+pub(super) struct TuiState {
+    pub(super) engine: Engine,
+    pub(super) ctx: CursiveCtx,
     pending_quit: bool,
     quit_scheduled: bool,
     last_connection: ConnectionState,
     last_applied_selection: Option<NodeId>,
     cli_path: Option<String>,
+    pub(super) dialog_open: bool,
 }
 
 #[derive(Clone)]
-struct CursiveCtx {
+pub(super) struct CursiveCtx {
     cb_sink: CbSink,
     clipboard: std::sync::Arc<Mutex<Option<arboard::Clipboard>>>,
 }
@@ -202,15 +205,31 @@ fn apply_and_refresh(siv: &mut Cursive, update: UiUpdate) {
         st.engine.apply_update(&ctx, update);
     });
     refresh_all(siv);
+    sync_dialog(siv);
     maybe_finish_quit(siv);
 }
 
-fn dispatch_action(siv: &mut Cursive, action: UiAction) {
+pub(super) fn dispatch_action(siv: &mut Cursive, action: UiAction) {
     siv.with_user_data(|st: &mut TuiState| {
         let ctx = st.ctx.clone();
         st.engine.dispatch(&ctx, action);
     });
     refresh_all(siv);
+    sync_dialog(siv);
+}
+
+fn sync_dialog(siv: &mut Cursive) {
+    let (want, have) = match siv.user_data::<TuiState>() {
+        Some(st) => (st.engine.model.endpoints_dialog_open, st.dialog_open),
+        None => return,
+    };
+    if want && !have {
+        endpoint_dialog::show(siv);
+    } else if !want && have {
+        endpoint_dialog::close(siv);
+    } else if want {
+        endpoint_dialog::refresh(siv);
+    }
 }
 
 fn request_quit(siv: &mut Cursive) {

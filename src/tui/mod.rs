@@ -39,6 +39,7 @@ const ID_CONNECT_BTN: &str = "connect_btn";
 const ID_DISCONNECT_BTN: &str = "disconnect_btn";
 
 const ID_URL_GATE: &str = "url_gate";
+const ID_HISTORY_GATE: &str = "history_gate";
 const ID_CONNECT_GATE: &str = "connect_gate";
 const ID_DISCONNECT_GATE: &str = "disconnect_gate";
 const ID_TREE_GATE: &str = "tree_gate";
@@ -324,6 +325,12 @@ fn build_connect_bar() -> impl cursive::view::View {
         .min_width(40);
     let url_gate = gated(framed(url_edit, "URL").full_width(), ID_URL_GATE);
 
+    let history_btn = cursive::views::Button::new("...", show_history_dropdown);
+    let history_gate = gated(
+        PaddedView::lrtb(0, 0, 1, 0, history_btn),
+        ID_HISTORY_GATE,
+    );
+
     let connect_btn = cursive::views::Button::new("Connect", |siv| {
         dispatch_action(siv, UiAction::ConnectClicked);
     })
@@ -346,12 +353,48 @@ fn build_connect_bar() -> impl cursive::view::View {
 
     LinearLayout::new(Orientation::Horizontal)
         .child(url_gate)
+        .child(history_gate)
         .child(DummyView.fixed_width(2))
         .child(connect_gate)
         .child(DummyView.fixed_width(1))
         .child(disconnect_gate)
         .child(DummyView.fixed_width(2))
         .child(quit_padded)
+}
+
+fn show_history_dropdown(siv: &mut Cursive) {
+    let history = siv
+        .user_data::<TuiState>()
+        .map(|st| st.engine.model.endpoint_history.clone())
+        .unwrap_or_default();
+    if history.is_empty() {
+        push_dismissable(
+            siv,
+            Dialog::info("No URLs in history yet.").title("Recent URLs"),
+        );
+        return;
+    }
+    let mut select = SelectView::<String>::new();
+    for url in &history {
+        select.add_item(url.clone(), url.clone());
+    }
+    select.set_on_submit(|s, url: &String| {
+        let chosen = url.clone();
+        s.pop_layer();
+        dispatch_action(s, UiAction::EndpointEdited(chosen));
+        s.focus_name(ID_URL).ok();
+    });
+    let dialog = Dialog::around(select.scrollable())
+        .title("Recent URLs (Enter to pick, Esc to cancel)")
+        .dismiss_button("Cancel");
+    push_dismissable(siv, dialog);
+}
+
+fn push_dismissable<V: cursive::view::View + 'static>(siv: &mut Cursive, view: V) {
+    let wrapped = OnEventView::new(view).on_pre_event(Key::Esc, |s| {
+        s.pop_layer();
+    });
+    siv.add_layer(wrapped);
 }
 
 fn build_tree_view() -> impl cursive::view::View {
@@ -451,7 +494,7 @@ Copy to clipboard (selected node):
 Other:
   q / Ctrl+C         Quit (disconnects cleanly first)
   ?                  This help";
-    siv.add_layer(Dialog::info(body).title("Keys"));
+    push_dismissable(siv, Dialog::info(body).title("Keys"));
 }
 
 #[derive(Clone)]
@@ -481,6 +524,7 @@ fn refresh_focus_gates(siv: &mut Cursive, snap: &ModelSnapshot) {
     let in_session = matches!(c, ConnectionState::Connected | ConnectionState::Connecting);
     let connected = matches!(c, ConnectionState::Connected);
     set_gate(siv, ID_URL_GATE, disconnected);
+    set_gate(siv, ID_HISTORY_GATE, disconnected);
     set_gate(siv, ID_CONNECT_GATE, disconnected);
     set_gate(siv, ID_DISCONNECT_GATE, in_session);
     set_gate(siv, ID_TREE_GATE, connected);

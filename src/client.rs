@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, Result};
 use opcua::client::custom_types::DataTypeTreeBuilder;
@@ -11,7 +12,7 @@ use opcua::types::{
     AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, DataValue,
     EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
     QualifiedName, ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode,
-    TimestampsToReturn, TypeLoader, UserTokenPolicy, UserTokenType, Variant,
+    TimestampsToReturn, TypeLoader, UserTokenType, Variant,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -33,6 +34,13 @@ enum State {
 
 pub struct UaClient {
     state: Mutex<State>,
+    /// When true, ClientBuilder is configured with `verify_server_certs(false)`,
+    /// which makes async-opcua skip server-certificate time, hostname and
+    /// application-URI checks. Defaults to `true` because many real servers
+    /// (Beckhoff TwinCAT, several Siemens setups, NAT'd deployments) ship
+    /// certificates that don't match the routable address the client uses.
+    /// A loud warning is emitted on every UaClient construction.
+    insecure: AtomicBool,
 }
 
 impl Default for UaClient {
@@ -42,9 +50,15 @@ impl Default for UaClient {
 }
 
 impl UaClient {
+    pub fn set_insecure(&self, on: bool) {
+        self.insecure.store(on, Ordering::Relaxed);
+    }
+
     pub fn new() -> Self {
+        warn_insecure_default();
         Self {
             state: Mutex::new(State::Disconnected),
+            insecure: AtomicBool::new(true),
         }
     }
 
@@ -59,7 +73,7 @@ impl UaClient {
             return Err(anyhow!("already connected"));
         }
 
-        let mut client = build_client()?;
+        let mut client = build_client(self.insecure.load(Ordering::Relaxed))?;
 
         let (policy_uri, mode) = match endpoint {
             Some(ep) => (
@@ -71,26 +85,44 @@ impl UaClient {
                 MessageSecurityMode::None,
             ),
         };
-        let target_url = match endpoint {
-            Some(ep) if !ep.endpoint_url.is_empty() => ep.endpoint_url.clone(),
-            _ => endpoint_url.to_string(),
-        };
         let identity = build_identity_token(auth)?;
         if mode != MessageSecurityMode::None {
             log_client_cert_hint();
         }
 
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(
-                (
-                    target_url.as_str(),
-                    policy_uri.as_str(),
-                    mode,
-                    UserTokenPolicy::anonymous(),
-                ),
-                identity,
-            )
+        // Fetch the server's endpoints ourselves so we have the full
+        // EndpointDescription (with server_certificate + user_identity_tokens),
+        // then connect_to_endpoint_directly. This sidesteps a Beckhoff/PLC
+        // quirk where servers return endpoints with internal hostnames the
+        // client can't resolve — `connect_to_matching_endpoint` would obey the
+        // server-reported URL and fail at TCP-resolve time. We always force the
+        // transport URL back to whatever the user actually typed.
+        let descriptions = client
+            .get_server_endpoints_from_url(endpoint_url)
             .await
+            .map_err(|e| anyhow!("get_server_endpoints failed: {e}"))?;
+        let mut matched = descriptions
+            .into_iter()
+            .find(|d| {
+                d.security_policy_uri.as_ref() == policy_uri && d.security_mode == mode
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "server has no endpoint with policy '{}' and mode {:?}",
+                    policy_uri,
+                    mode
+                )
+            })?;
+        let reported_url = matched.endpoint_url.as_ref().to_string();
+        if !reported_url.is_empty() && reported_url != endpoint_url {
+            tracing::info!(
+                "server endpoint URL is {reported_url}; forcing transport to typed URL {endpoint_url}"
+            );
+        }
+        matched.endpoint_url = endpoint_url.into();
+
+        let (session, event_loop) = client
+            .connect_to_endpoint_directly(matched, identity)
             .map_err(|e| {
                 let msg = e.to_string();
                 let lower = msg.to_lowercase();
@@ -106,7 +138,7 @@ impl UaClient {
                          Mark pki/own/cert.der as trusted in the server's PKI store and try again."
                     );
                 }
-                anyhow!("connect_to_matching_endpoint failed: {e}")
+                anyhow!("connect_to_endpoint_directly failed: {e}")
             })?;
 
         let mut handle = event_loop.spawn();
@@ -228,7 +260,7 @@ impl UaClient {
     }
 
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
-        let client = build_client()?;
+        let client = build_client(self.insecure.load(Ordering::Relaxed))?;
         let descriptions = client
             .get_server_endpoints_from_url(endpoint_url)
             .await
@@ -579,12 +611,22 @@ fn build_identity_token(auth: &AuthSpec) -> Result<IdentityToken> {
 const APPLICATION_NAME: &str = "Rust OPC UA Client from FreeOpcUa";
 const APPLICATION_URI: &str = "urn:FreeOpcUa:ua-client";
 
-fn build_client() -> Result<opcua::client::Client> {
+fn warn_insecure_default() {
+    tracing::warn!("════════════════════════════════════════════════════════════════");
+    tracing::warn!("⚠  INSECURE DEFAULT: server-certificate checks are DISABLED");
+    tracing::warn!("   — time validity, hostname and application-URI not verified");
+    tracing::warn!("   — connections will succeed against expired / impersonating");
+    tracing::warn!("     servers. Acceptable on trusted networks only.");
+    tracing::warn!("════════════════════════════════════════════════════════════════");
+}
+
+fn build_client(insecure: bool) -> Result<opcua::client::Client> {
     ClientBuilder::new()
         .application_name(APPLICATION_NAME)
         .application_uri(APPLICATION_URI)
         .product_uri(APPLICATION_URI)
         .trust_server_certs(true)
+        .verify_server_certs(!insecure)
         .create_sample_keypair(true)
         .session_retry_limit(0)
         .client()

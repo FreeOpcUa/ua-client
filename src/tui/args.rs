@@ -70,6 +70,9 @@ OPTIONS:
                      Implies auto-connect.
     -h, --help       Print this help and exit.
 
+Note: server-certificate checks (time, hostname, application URI) are
+currently DISABLED by default — see the warning printed at startup.
+
 KEYBOARD SHORTCUTS (inside the TUI):
     Tab / Shift+Tab    Move focus between widgets (skips disabled ones)
     Arrows / j / k     Move within the focused widget

@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use cursive::Cursive;
 use cursive::direction::Orientation;
 use cursive::event::Key;
@@ -8,7 +6,7 @@ use cursive::views::{Dialog, DummyView, EditView, LinearLayout, OnEventView, Tex
 
 use crate::messages::UiAction;
 use crate::model::MethodCallState;
-use crate::types::{MethodArgument, MethodCallOutcome, MethodSignature, ValueTree};
+use crate::types::{MethodArgument, MethodCallOutcome, MethodSignature};
 
 use super::{TuiState, dispatch_action};
 
@@ -266,7 +264,7 @@ fn build_result_body(
             let rendered = outcome
                 .outputs
                 .get(i)
-                .map(render_value_inline)
+                .map(|v| v.format_inline())
                 .unwrap_or_else(|| "<missing>".to_string());
             layout.add_child(TextView::new(format!(
                 "  {} ({}): {}",
@@ -328,40 +326,3 @@ fn arg_error_id(index: usize) -> String {
     format!("method_arg_err_{index}")
 }
 
-fn render_value_inline(v: &ValueTree) -> String {
-    let mut out = String::new();
-    render(v, &mut out);
-    out
-}
-
-fn render(v: &ValueTree, out: &mut String) {
-    match v {
-        ValueTree::Null => {
-            let _ = write!(out, "<null>");
-        }
-        ValueTree::Leaf(s) => {
-            let _ = write!(out, "{s}");
-        }
-        ValueTree::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                render(item, out);
-            }
-            out.push(']');
-        }
-        ValueTree::Object(fields) => {
-            out.push('{');
-            for (i, (k, val)) in fields.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                let _ = write!(out, "{k}: ");
-                render(val, out);
-            }
-            out.push('}');
-        }
-    }
-}

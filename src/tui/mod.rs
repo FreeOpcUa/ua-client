@@ -29,7 +29,7 @@ use focus_gate::FocusGate;
 use crate::engine::{Engine, FilePickTarget, FrontendCtx};
 use crate::messages::{UiAction, UiUpdate};
 use crate::model::{AppModel, ConnectionState, DetailTab};
-use crate::types::{LogLevel, ValueTree};
+use crate::types::LogLevel;
 
 const ID_URL: &str = "url";
 const ID_TITLE: &str = "title";
@@ -954,51 +954,51 @@ fn build_attrs_text(model: &AppModel) -> String {
         }
         return "Select a node in the tree to view its attributes.".to_string();
     };
+    let name_width = summary
+        .attributes
+        .iter()
+        .map(|a| a.name.chars().count())
+        .max()
+        .unwrap_or(0);
     let mut out = String::new();
     let _ = writeln!(out, "Node: {}", summary.node_id);
     out.push('\n');
     for attr in &summary.attributes {
-        let _ = writeln!(out, "{}:", attr.name);
-        render_value(&attr.value, 1, &mut out);
-        out.push('\n');
+        let _ = writeln!(
+            out,
+            "{:<width$} : {}",
+            attr.name,
+            attr.value.format_inline(),
+            width = name_width
+        );
     }
     out
-}
-
-fn render_value(v: &ValueTree, depth: usize, out: &mut String) {
-    let pad = "  ".repeat(depth);
-    match v {
-        ValueTree::Null => {
-            let _ = writeln!(out, "{pad}<null>");
-        }
-        ValueTree::Leaf(s) => {
-            let _ = writeln!(out, "{pad}{s}");
-        }
-        ValueTree::Array(items) => {
-            for (i, item) in items.iter().enumerate() {
-                let _ = writeln!(out, "{pad}[{i}]");
-                render_value(item, depth + 1, out);
-            }
-        }
-        ValueTree::Object(fields) => {
-            for (k, val) in fields {
-                let _ = writeln!(out, "{pad}{k}:");
-                render_value(val, depth + 1, out);
-            }
-        }
-    }
 }
 
 fn build_refs_rows(model: &AppModel) -> Vec<RefRow> {
     let Some(refs) = model.references.as_ref() else {
         return Vec::new();
     };
+    let ref_type_width = refs
+        .iter()
+        .map(|r| r.reference_type.chars().count())
+        .max()
+        .unwrap_or(0);
+    let name_width = refs
+        .iter()
+        .map(|r| r.target_display_name.chars().count())
+        .max()
+        .unwrap_or(0);
     refs.iter()
         .map(|r| {
             let arrow = if r.is_forward { "→" } else { "←" };
             let label = format!(
-                "{arrow} {} · {} · {}",
-                r.reference_type, r.target_display_name, r.target_node_id
+                "{arrow} {:<ref_w$}  {:<name_w$}  {}",
+                r.reference_type,
+                r.target_display_name,
+                r.target_node_id,
+                ref_w = ref_type_width,
+                name_w = name_width,
             );
             RefRow {
                 target: r.target_node_id.clone(),

@@ -29,6 +29,43 @@ pub enum ValueTree {
     Object(Vec<(String, ValueTree)>),
 }
 
+impl ValueTree {
+    /// Render this value on a single line.
+    pub fn format_inline(&self) -> String {
+        use std::fmt::Write as _;
+        fn write(v: &ValueTree, out: &mut String) {
+            match v {
+                ValueTree::Null => out.push_str("<null>"),
+                ValueTree::Leaf(s) => out.push_str(s),
+                ValueTree::Array(items) => {
+                    out.push('[');
+                    for (i, item) in items.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        write(item, out);
+                    }
+                    out.push(']');
+                }
+                ValueTree::Object(fields) => {
+                    out.push('{');
+                    for (i, (k, val)) in fields.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        let _ = write!(out, "{k}: ");
+                        write(val, out);
+                    }
+                    out.push('}');
+                }
+            }
+        }
+        let mut out = String::new();
+        write(self, &mut out);
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AuthSpec {
     pub mode: AuthMode,

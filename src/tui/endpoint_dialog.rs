@@ -3,8 +3,8 @@ use cursive::direction::Orientation;
 use cursive::event::Key;
 use cursive::view::{Nameable, Resizable, Scrollable};
 use cursive::views::{
-    BoxedView, Dialog, DummyView, EditView, HideableView, LinearLayout, OnEventView, Panel,
-    RadioGroup, SelectView, TextView,
+    BoxedView, Dialog, DialogFocus, DummyView, EditView, HideableView, LinearLayout, OnEventView,
+    Panel, RadioGroup, SelectView, TextView,
 };
 
 use crate::messages::UiAction;
@@ -27,7 +27,8 @@ pub fn show(siv: &mut Cursive) {
         Some(st) => InitialState::from(&st.engine.model),
         None => return,
     };
-    let dialog = build(snap);
+    let mut dialog = build(snap);
+    let _ = dialog.set_focus(DialogFocus::Button(2));
     let wrapped = OnEventView::new(dialog).on_pre_event(Key::Esc, |s| {
         dispatch_action(s, UiAction::CloseEndpointPicker);
     });

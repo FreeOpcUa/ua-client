@@ -364,7 +364,10 @@ impl UaClient {
                 }
             }
         }
-        attributes.sort_by(|a, b| a.name.cmp(&b.name));
+        attributes.sort_by(|a, b| {
+            let rank = |n: &str| if n == "Value" { 0 } else { 1 };
+            rank(&a.name).cmp(&rank(&b.name)).then_with(|| a.name.cmp(&b.name))
+        });
 
         Ok(NodeSummary {
             node_id: node_id.clone(),
@@ -971,12 +974,9 @@ const APPLICATION_NAME: &str = "Rust OPC UA Client from FreeOpcUa";
 const APPLICATION_URI: &str = "urn:FreeOpcUa:ua-client";
 
 fn warn_insecure_default() {
-    tracing::warn!("════════════════════════════════════════════════════════════════");
-    tracing::warn!("⚠  INSECURE DEFAULT: server-certificate checks are DISABLED");
-    tracing::warn!("   — time validity, hostname and application-URI not verified");
-    tracing::warn!("   — connections will succeed against expired / impersonating");
-    tracing::warn!("     servers. Acceptable on trusted networks only.");
-    tracing::warn!("════════════════════════════════════════════════════════════════");
+    tracing::warn!(
+        "INSECURE DEFAULT: server-certificate checks (time, hostname, application-URI) are DISABLED — trusted networks only"
+    );
 }
 
 fn build_client(verify_cert_metadata: bool) -> Result<opcua::client::Client> {

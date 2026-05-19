@@ -1,18 +1,16 @@
 use std::process::ExitCode;
 
+use clap::Parser;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use ua_client::engine::Engine;
 use ua_client::logger;
 use ua_client::tui;
-use ua_client::tui::args::{ArgParseResult, parse};
+use ua_client::tui::args::TuiArgs;
 
 fn main() -> ExitCode {
-    let args = match parse(std::env::args()) {
-        ArgParseResult::Run(a) => a,
-        ArgParseResult::Exit(code) => return code,
-    };
+    let args = TuiArgs::parse();
 
     let (log_tx, log_rx) = mpsc::unbounded_channel();
     logger::init_tracing(log_tx);

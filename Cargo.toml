@@ -17,6 +17,7 @@ tui = ["dep:cursive", "dep:arboard"]
 [dependencies]
 anyhow = "1"
 arboard = { version = "3", optional = true }
+clap = { version = "4", features = ["derive"] }
 async-opcua = { version = "0.18", default-features = false, features = [
   "client",
   "json"

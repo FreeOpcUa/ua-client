@@ -3,8 +3,50 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use opcua::types::{NodeId, ObjectId};
 
 use crate::types::{
-    AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+    AuthMode, EndpointInfo, LogLine, MethodCallOutcome, MethodSignature, NodeSummary, ReferenceRow,
+    SecurityMode, TreeChild,
 };
+
+#[derive(Debug, Clone)]
+pub enum MethodCallState {
+    Loading {
+        node: NodeId,
+    },
+    Failed {
+        node: NodeId,
+        error: String,
+    },
+    Inputs {
+        node: NodeId,
+        signature: MethodSignature,
+        edited: Vec<String>,
+        field_errors: Vec<Option<String>>,
+        call_error: Option<String>,
+    },
+    Calling {
+        node: NodeId,
+        signature: MethodSignature,
+        edited: Vec<String>,
+    },
+    Result {
+        node: NodeId,
+        signature: MethodSignature,
+        edited: Vec<String>,
+        outcome: MethodCallOutcome,
+    },
+}
+
+impl MethodCallState {
+    pub fn node(&self) -> &NodeId {
+        match self {
+            MethodCallState::Loading { node }
+            | MethodCallState::Failed { node, .. }
+            | MethodCallState::Inputs { node, .. }
+            | MethodCallState::Calling { node, .. }
+            | MethodCallState::Result { node, .. } => node,
+        }
+    }
+}
 
 const MAX_LOG_LINES: usize = 1000;
 const MAX_HISTORY: usize = 20;
@@ -64,6 +106,7 @@ pub struct AppModel {
     pub last_selection_paths: HashMap<String, Vec<NodeId>>,
     pub endpoint_mode_filter: SecurityMode,
     pub file_picker_open: bool,
+    pub method_call: Option<MethodCallState>,
 }
 
 impl Default for AppModel {
@@ -92,6 +135,7 @@ impl Default for AppModel {
             last_selection_paths: HashMap::new(),
             endpoint_mode_filter: SecurityMode::None,
             file_picker_open: false,
+            method_call: None,
         }
     }
 }
@@ -110,6 +154,7 @@ impl AppModel {
         self.node_summary = None;
         self.references = None;
         self.references_loading = false;
+        self.method_call = None;
     }
 
     pub fn record_successful_connection(&mut self) {

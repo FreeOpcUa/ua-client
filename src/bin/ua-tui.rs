@@ -6,12 +6,12 @@ use tokio::sync::mpsc;
 use ua_client::engine::Engine;
 use ua_client::logger;
 use ua_client::tui;
-use ua_client::tui::args::{ParseOutcome, parse};
+use ua_client::tui::args::{ArgParseResult, parse};
 
 fn main() -> ExitCode {
     let args = match parse(std::env::args()) {
-        ParseOutcome::Run(a) => a,
-        ParseOutcome::Exit(code) => return code,
+        ArgParseResult::Run(a) => a,
+        ArgParseResult::Exit(code) => return code,
     };
 
     let (log_tx, log_rx) = mpsc::unbounded_channel();

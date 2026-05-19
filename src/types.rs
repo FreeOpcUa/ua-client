@@ -76,6 +76,31 @@ pub struct EndpointInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct MethodArgument {
+    pub name: String,
+    pub description: String,
+    pub data_type: NodeId,
+    pub value_rank: i32,
+    pub type_label: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodSignature {
+    pub parent_object: NodeId,
+    pub method_node: NodeId,
+    pub method_display_name: String,
+    pub inputs: Vec<MethodArgument>,
+    pub outputs: Vec<MethodArgument>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodCallOutcome {
+    pub status: String,
+    pub outputs: Vec<ValueTree>,
+    pub input_arg_errors: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReferenceRow {
     pub reference_type: String,
     pub is_forward: bool,

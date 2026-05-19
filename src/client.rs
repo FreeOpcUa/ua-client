@@ -2,24 +2,25 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use opcua::client::custom_types::DataTypeTreeBuilder;
 use opcua::client::{ClientBuilder, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
 use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
-    AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection, DataValue,
-    EndpointDescription, ExpandedNodeId, MessageSecurityMode, NodeClass, NodeClassMask, NodeId,
-    QualifiedName, ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode,
-    TimestampsToReturn, TypeLoader, UserTokenType, Variant,
+    Argument, Array, AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
+    CallMethodRequest, DataTypeId, DataValue, EndpointDescription, ExpandedNodeId, Guid,
+    Identifier, MessageSecurityMode, NodeClass, NodeClassMask, NodeId, QualifiedName, ReadValueId,
+    ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, TryFromVariant,
+    TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::types::{
-    AuthMode, AuthSpec, EndpointInfo, NodeAttribute, NodeSummary, ReferenceRow, SecurityMode,
-    TreeChild, ValueTree,
+    AuthMode, AuthSpec, EndpointInfo, MethodArgument, MethodCallOutcome, MethodSignature,
+    NodeAttribute, NodeSummary, ReferenceRow, SecurityMode, TreeChild, ValueTree,
 };
 
 struct Connected {
@@ -40,7 +41,7 @@ pub struct UaClient {
     /// (Beckhoff TwinCAT, several Siemens setups, NAT'd deployments) ship
     /// certificates that don't match the routable address the client uses.
     /// A loud warning is emitted on every UaClient construction.
-    insecure: AtomicBool,
+    verify_certificate_metadata: AtomicBool,
 }
 
 impl Default for UaClient {
@@ -50,15 +51,16 @@ impl Default for UaClient {
 }
 
 impl UaClient {
-    pub fn set_insecure(&self, on: bool) {
-        self.insecure.store(on, Ordering::Relaxed);
+    pub fn set_verify_cert_metadata(&self, on: bool) {
+        self.verify_certificate_metadata
+            .store(on, Ordering::Relaxed);
     }
 
     pub fn new() -> Self {
         warn_insecure_default();
         Self {
             state: Mutex::new(State::Disconnected),
-            insecure: AtomicBool::new(true),
+            verify_certificate_metadata: AtomicBool::new(false),
         }
     }
 
@@ -73,7 +75,7 @@ impl UaClient {
             return Err(anyhow!("already connected"));
         }
 
-        let mut client = build_client(self.insecure.load(Ordering::Relaxed))?;
+        let mut client = build_client(self.verify_certificate_metadata.load(Ordering::Relaxed))?;
 
         let (policy_uri, mode) = match endpoint {
             Some(ep) => (
@@ -103,9 +105,7 @@ impl UaClient {
             .map_err(|e| anyhow!("get_server_endpoints failed: {e}"))?;
         let mut matched = descriptions
             .into_iter()
-            .find(|d| {
-                d.security_policy_uri.as_ref() == policy_uri && d.security_mode == mode
-            })
+            .find(|d| d.security_policy_uri.as_ref() == policy_uri && d.security_mode == mode)
             .ok_or_else(|| {
                 anyhow!(
                     "server has no endpoint with policy '{}' and mode {:?}",
@@ -260,7 +260,7 @@ impl UaClient {
     }
 
     pub async fn discover_endpoints(&self, endpoint_url: &str) -> Result<Vec<EndpointInfo>> {
-        let client = build_client(self.insecure.load(Ordering::Relaxed))?;
+        let client = build_client(self.verify_certificate_metadata.load(Ordering::Relaxed))?;
         let descriptions = client
             .get_server_endpoints_from_url(endpoint_url)
             .await
@@ -372,6 +372,83 @@ impl UaClient {
         })
     }
 
+    pub async fn read_method_signature(&self, method_node_id: &NodeId) -> Result<MethodSignature> {
+        let session = self.session().await?;
+        let node_class = read_node_class(&session, method_node_id).await?;
+        if node_class != NodeClass::Method {
+            return Err(anyhow!("node {method_node_id} is not a Method ({node_class:?})"));
+        }
+        let parent_object = read_inverse_parent(&session, method_node_id)
+            .await?
+            .ok_or_else(|| anyhow!("method has no parent object"))?;
+        let method_display_name = read_display_name(&session, method_node_id)
+            .await
+            .unwrap_or_else(|_| method_node_id.to_string());
+
+        let (inputs_node, outputs_node) = find_argument_properties(&session, method_node_id).await?;
+        let inputs = match inputs_node {
+            Some(n) => read_argument_list(&session, &n).await?,
+            None => Vec::new(),
+        };
+        let outputs = match outputs_node {
+            Some(n) => read_argument_list(&session, &n).await?,
+            None => Vec::new(),
+        };
+
+        let mut input_args = Vec::with_capacity(inputs.len());
+        for a in inputs {
+            input_args.push(argument_to_method_argument(&session, a).await);
+        }
+        let mut output_args = Vec::with_capacity(outputs.len());
+        for a in outputs {
+            output_args.push(argument_to_method_argument(&session, a).await);
+        }
+
+        Ok(MethodSignature {
+            parent_object,
+            method_node: method_node_id.clone(),
+            method_display_name,
+            inputs: input_args,
+            outputs: output_args,
+        })
+    }
+
+    pub async fn call_method(
+        &self,
+        parent_object: &NodeId,
+        method_node_id: &NodeId,
+        inputs: Vec<Variant>,
+    ) -> Result<MethodCallOutcome> {
+        let session = self.session().await?;
+        let request = CallMethodRequest {
+            object_id: parent_object.clone(),
+            method_id: method_node_id.clone(),
+            input_arguments: Some(inputs),
+        };
+        let r = session
+            .call_one(request)
+            .await
+            .map_err(|s| anyhow!("call failed: {s}"))?;
+        let status = r.status_code.to_string();
+        let outputs = r
+            .output_arguments
+            .unwrap_or_default()
+            .iter()
+            .map(|v| variant_to_tree(&session, v))
+            .collect();
+        let input_arg_errors = r
+            .input_argument_results
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| if s.is_good() { None } else { Some(s.to_string()) })
+            .collect();
+        Ok(MethodCallOutcome {
+            status,
+            outputs,
+            input_arg_errors,
+        })
+    }
+
     pub async fn browse_references(&self, node_id: &NodeId) -> Result<Vec<ReferenceRow>> {
         let session = self.session().await?;
         let desc = BrowseDescription {
@@ -397,6 +474,288 @@ impl UaClient {
         }
         Ok(rows)
     }
+}
+
+async fn read_node_class(session: &Session, node_id: &NodeId) -> Result<NodeClass> {
+    let to_read = vec![ReadValueId::new(node_id.clone(), AttributeId::NodeClass)];
+    let values = session
+        .read(&to_read, TimestampsToReturn::Neither, 0.0)
+        .await
+        .map_err(|s| anyhow!("read NodeClass failed: {s}"))?;
+    let v = values
+        .into_iter()
+        .next()
+        .and_then(|v| v.value)
+        .ok_or_else(|| anyhow!("NodeClass attribute missing for {node_id}"))?;
+    match v {
+        Variant::Int32(i) => NodeClass::try_from(i)
+            .map_err(|_| anyhow!("invalid NodeClass {i} for {node_id}")),
+        other => Err(anyhow!("unexpected NodeClass variant: {other:?}")),
+    }
+}
+
+async fn read_display_name(session: &Session, node_id: &NodeId) -> Result<String> {
+    let to_read = vec![ReadValueId::new(node_id.clone(), AttributeId::DisplayName)];
+    let values = session
+        .read(&to_read, TimestampsToReturn::Neither, 0.0)
+        .await
+        .map_err(|s| anyhow!("read DisplayName failed: {s}"))?;
+    let text = values
+        .into_iter()
+        .next()
+        .and_then(|v| v.value)
+        .and_then(|v| match v {
+            Variant::LocalizedText(t) => Some(t.text.to_string()),
+            _ => None,
+        });
+    Ok(text.unwrap_or_else(|| node_id.to_string()))
+}
+
+async fn find_argument_properties(
+    session: &Session,
+    method_node_id: &NodeId,
+) -> Result<(Option<NodeId>, Option<NodeId>)> {
+    let desc = BrowseDescription {
+        node_id: method_node_id.clone(),
+        browse_direction: BrowseDirection::Forward,
+        reference_type_id: NodeId::new(0, ReferenceTypeId::HasProperty as u32),
+        include_subtypes: true,
+        node_class_mask: NodeClassMask::VARIABLE.bits(),
+        result_mask: BrowseDescriptionResultMask::all().bits(),
+    };
+    let mut results = session
+        .browse(&[desc], 0, None)
+        .await
+        .map_err(|s| anyhow!("browse properties failed: {s}"))?;
+    let refs = results
+        .pop()
+        .and_then(|r| r.references)
+        .unwrap_or_default();
+    let mut inputs = None;
+    let mut outputs = None;
+    for r in refs {
+        if r.browse_name.namespace_index != 0 {
+            continue;
+        }
+        match r.browse_name.name.as_ref() {
+            "InputArguments" => inputs = Some(r.node_id.node_id),
+            "OutputArguments" => outputs = Some(r.node_id.node_id),
+            _ => {}
+        }
+    }
+    Ok((inputs, outputs))
+}
+
+async fn read_argument_list(session: &Session, property_node: &NodeId) -> Result<Vec<Argument>> {
+    let to_read = vec![ReadValueId::new(property_node.clone(), AttributeId::Value)];
+    let values = session
+        .read(&to_read, TimestampsToReturn::Neither, 0.0)
+        .await
+        .map_err(|s| anyhow!("read {property_node} failed: {s}"))?;
+    let Some(variant) = values.into_iter().next().and_then(|v| v.value) else {
+        return Ok(Vec::new());
+    };
+    if matches!(variant, Variant::Empty) {
+        return Ok(Vec::new());
+    }
+    <Vec<Argument>>::try_from_variant(variant)
+        .map_err(|e| anyhow!("decode Argument array failed: {e}"))
+}
+
+async fn argument_to_method_argument(session: &Session, a: Argument) -> MethodArgument {
+    let type_label = data_type_label(session, &a.data_type, a.value_rank).await;
+    MethodArgument {
+        name: a.name.to_string(),
+        description: a.description.text.to_string(),
+        data_type: a.data_type,
+        value_rank: a.value_rank,
+        type_label,
+    }
+}
+
+async fn data_type_label(session: &Session, data_type: &NodeId, value_rank: i32) -> String {
+    let base = match builtin_data_type_label(data_type) {
+        Some(s) => s.to_string(),
+        None => read_display_name(session, data_type)
+            .await
+            .unwrap_or_else(|_| data_type.to_string()),
+    };
+    if value_rank >= 1 {
+        format!("{base}[]")
+    } else {
+        base
+    }
+}
+
+fn builtin_data_type_label(id: &NodeId) -> Option<&'static str> {
+    if id.namespace != 0 {
+        return None;
+    }
+    let Identifier::Numeric(n) = id.identifier else {
+        return None;
+    };
+    Some(match n {
+        x if x == DataTypeId::Boolean as u32 => "Boolean",
+        x if x == DataTypeId::SByte as u32 => "SByte",
+        x if x == DataTypeId::Byte as u32 => "Byte",
+        x if x == DataTypeId::Int16 as u32 => "Int16",
+        x if x == DataTypeId::UInt16 as u32 => "UInt16",
+        x if x == DataTypeId::Int32 as u32 => "Int32",
+        x if x == DataTypeId::UInt32 as u32 => "UInt32",
+        x if x == DataTypeId::Int64 as u32 => "Int64",
+        x if x == DataTypeId::UInt64 as u32 => "UInt64",
+        x if x == DataTypeId::Float as u32 => "Float",
+        x if x == DataTypeId::Double as u32 => "Double",
+        x if x == DataTypeId::String as u32 => "String",
+        x if x == DataTypeId::DateTime as u32 => "DateTime",
+        x if x == DataTypeId::Guid as u32 => "Guid",
+        x if x == DataTypeId::ByteString as u32 => "ByteString",
+        x if x == DataTypeId::NodeId as u32 => "NodeId",
+        x if x == DataTypeId::ExpandedNodeId as u32 => "ExpandedNodeId",
+        x if x == DataTypeId::StatusCode as u32 => "StatusCode",
+        x if x == DataTypeId::QualifiedName as u32 => "QualifiedName",
+        x if x == DataTypeId::LocalizedText as u32 => "LocalizedText",
+        _ => return None,
+    })
+}
+
+/// Parse a user-typed string into a `Variant` of the expected `data_type`.
+/// Honors `value_rank`: rank ≥ 1 expects comma-separated values.
+pub fn parse_variant(input: &str, data_type: &NodeId, value_rank: i32) -> Result<Variant, String> {
+    let is_array = value_rank >= 1;
+    let scalar_type = builtin_scalar_type(data_type)
+        .ok_or_else(|| format!("unsupported data type: {data_type}"))?;
+    if !is_array {
+        return parse_scalar(input.trim(), scalar_type);
+    }
+    let trimmed = input.trim().trim_start_matches('[').trim_end_matches(']');
+    let tokens: Vec<&str> = if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        trimmed.split(',').map(|s| s.trim()).collect()
+    };
+    let mut variants = Vec::with_capacity(tokens.len());
+    for (i, t) in tokens.iter().enumerate() {
+        let v = parse_scalar(t, scalar_type).map_err(|e| format!("item {i}: {e}"))?;
+        variants.push(v);
+    }
+    let variant_type = scalar_type_to_variant_scalar(scalar_type);
+    let array = Array::new(variant_type, variants).map_err(|e| format!("array build: {e}"))?;
+    Ok(Variant::Array(Box::new(array)))
+}
+
+#[derive(Clone, Copy)]
+enum ScalarType {
+    Boolean,
+    SByte,
+    Byte,
+    Int16,
+    UInt16,
+    Int32,
+    UInt32,
+    Int64,
+    UInt64,
+    Float,
+    Double,
+    String,
+    NodeId,
+    Guid,
+}
+
+fn builtin_scalar_type(id: &NodeId) -> Option<ScalarType> {
+    if id.namespace != 0 {
+        return None;
+    }
+    let Identifier::Numeric(n) = id.identifier else {
+        return None;
+    };
+    Some(match n {
+        x if x == DataTypeId::Boolean as u32 => ScalarType::Boolean,
+        x if x == DataTypeId::SByte as u32 => ScalarType::SByte,
+        x if x == DataTypeId::Byte as u32 => ScalarType::Byte,
+        x if x == DataTypeId::Int16 as u32 => ScalarType::Int16,
+        x if x == DataTypeId::UInt16 as u32 => ScalarType::UInt16,
+        x if x == DataTypeId::Int32 as u32 => ScalarType::Int32,
+        x if x == DataTypeId::UInt32 as u32 => ScalarType::UInt32,
+        x if x == DataTypeId::Int64 as u32 => ScalarType::Int64,
+        x if x == DataTypeId::UInt64 as u32 => ScalarType::UInt64,
+        x if x == DataTypeId::Float as u32 => ScalarType::Float,
+        x if x == DataTypeId::Double as u32 => ScalarType::Double,
+        x if x == DataTypeId::String as u32 => ScalarType::String,
+        x if x == DataTypeId::NodeId as u32 => ScalarType::NodeId,
+        x if x == DataTypeId::Guid as u32 => ScalarType::Guid,
+        _ => return None,
+    })
+}
+
+fn scalar_type_to_variant_scalar(t: ScalarType) -> VariantScalarTypeId {
+    match t {
+        ScalarType::Boolean => VariantScalarTypeId::Boolean,
+        ScalarType::SByte => VariantScalarTypeId::SByte,
+        ScalarType::Byte => VariantScalarTypeId::Byte,
+        ScalarType::Int16 => VariantScalarTypeId::Int16,
+        ScalarType::UInt16 => VariantScalarTypeId::UInt16,
+        ScalarType::Int32 => VariantScalarTypeId::Int32,
+        ScalarType::UInt32 => VariantScalarTypeId::UInt32,
+        ScalarType::Int64 => VariantScalarTypeId::Int64,
+        ScalarType::UInt64 => VariantScalarTypeId::UInt64,
+        ScalarType::Float => VariantScalarTypeId::Float,
+        ScalarType::Double => VariantScalarTypeId::Double,
+        ScalarType::String => VariantScalarTypeId::String,
+        ScalarType::NodeId => VariantScalarTypeId::NodeId,
+        ScalarType::Guid => VariantScalarTypeId::Guid,
+    }
+}
+
+fn parse_scalar(s: &str, t: ScalarType) -> Result<Variant, String> {
+    if matches!(t, ScalarType::String) {
+        return Ok(Variant::String(UAString::from(s)));
+    }
+    if s.is_empty() {
+        return Err("value required".to_string());
+    }
+    Ok(match t {
+        ScalarType::Boolean => Variant::Boolean(
+            s.parse::<bool>().map_err(|e| format!("invalid Boolean: {e}"))?,
+        ),
+        ScalarType::SByte => {
+            Variant::SByte(s.parse::<i8>().map_err(|e| format!("invalid SByte: {e}"))?)
+        }
+        ScalarType::Byte => {
+            Variant::Byte(s.parse::<u8>().map_err(|e| format!("invalid Byte: {e}"))?)
+        }
+        ScalarType::Int16 => {
+            Variant::Int16(s.parse::<i16>().map_err(|e| format!("invalid Int16: {e}"))?)
+        }
+        ScalarType::UInt16 => Variant::UInt16(
+            s.parse::<u16>().map_err(|e| format!("invalid UInt16: {e}"))?,
+        ),
+        ScalarType::Int32 => {
+            Variant::Int32(s.parse::<i32>().map_err(|e| format!("invalid Int32: {e}"))?)
+        }
+        ScalarType::UInt32 => Variant::UInt32(
+            s.parse::<u32>().map_err(|e| format!("invalid UInt32: {e}"))?,
+        ),
+        ScalarType::Int64 => {
+            Variant::Int64(s.parse::<i64>().map_err(|e| format!("invalid Int64: {e}"))?)
+        }
+        ScalarType::UInt64 => Variant::UInt64(
+            s.parse::<u64>().map_err(|e| format!("invalid UInt64: {e}"))?,
+        ),
+        ScalarType::Float => {
+            Variant::Float(s.parse::<f32>().map_err(|e| format!("invalid Float: {e}"))?)
+        }
+        ScalarType::Double => Variant::Double(
+            s.parse::<f64>().map_err(|e| format!("invalid Double: {e}"))?,
+        ),
+        ScalarType::String => unreachable!(),
+        ScalarType::NodeId => Variant::NodeId(Box::new(
+            NodeId::from_str(s).map_err(|e| format!("invalid NodeId: {e}"))?,
+        )),
+        ScalarType::Guid => Variant::Guid(Box::new(
+            Guid::from_str(s).map_err(|e| format!("invalid Guid: {e:?}"))?,
+        )),
+    })
 }
 
 async fn read_browse_name(session: &Session, node_id: &NodeId) -> Result<String> {
@@ -620,13 +979,13 @@ fn warn_insecure_default() {
     tracing::warn!("════════════════════════════════════════════════════════════════");
 }
 
-fn build_client(insecure: bool) -> Result<opcua::client::Client> {
+fn build_client(verify_cert_metadata: bool) -> Result<opcua::client::Client> {
     ClientBuilder::new()
         .application_name(APPLICATION_NAME)
         .application_uri(APPLICATION_URI)
         .product_uri(APPLICATION_URI)
         .trust_server_certs(true)
-        .verify_server_certs(!insecure)
+        .verify_server_certs(verify_cert_metadata)
         .create_sample_keypair(true)
         .session_retry_limit(0)
         .client()
@@ -693,7 +1052,10 @@ const ALL_ATTRIBUTES: &[(AttributeId, &str)] = &[
     (AttributeId::Historizing, "Historizing"),
     (AttributeId::InverseName, "InverseName"),
     (AttributeId::IsAbstract, "IsAbstract"),
-    (AttributeId::MinimumSamplingInterval, "MinimumSamplingInterval"),
+    (
+        AttributeId::MinimumSamplingInterval,
+        "MinimumSamplingInterval",
+    ),
     (AttributeId::NodeClass, "NodeClass"),
     (AttributeId::NodeId, "NodeId"),
     (AttributeId::RolePermissions, "RolePermissions"),
@@ -755,9 +1117,12 @@ fn variant_to_tree(session: &Session, v: &Variant) -> ValueTree {
         Variant::Variant(inner) => variant_to_tree(session, inner),
         Variant::DataValue(_) => ValueTree::Leaf("DataValue(…)".to_string()),
         Variant::DiagnosticInfo(_) => ValueTree::Leaf("DiagnosticInfo(…)".to_string()),
-        Variant::Array(arr) => {
-            ValueTree::Array(arr.values.iter().map(|i| variant_to_tree(session, i)).collect())
-        }
+        Variant::Array(arr) => ValueTree::Array(
+            arr.values
+                .iter()
+                .map(|i| variant_to_tree(session, i))
+                .collect(),
+        ),
     }
 }
 
@@ -819,10 +1184,7 @@ async fn find_child_by_browse_name(
         .browse(&[desc], 0, None)
         .await
         .map_err(|s| anyhow!("browse failed: {s}"))?;
-    let refs = results
-        .pop()
-        .and_then(|r| r.references)
-        .unwrap_or_default();
+    let refs = results.pop().and_then(|r| r.references).unwrap_or_default();
     for r in refs {
         if is_excluded_tree_reference(&r.reference_type_id) {
             continue;

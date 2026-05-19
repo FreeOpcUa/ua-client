@@ -2,7 +2,8 @@ use opcua::types::NodeId;
 
 use crate::model::DetailTab;
 use crate::types::{
-    AuthMode, EndpointInfo, LogLine, NodeSummary, ReferenceRow, SecurityMode, TreeChild,
+    AuthMode, EndpointInfo, LogLine, MethodCallOutcome, MethodSignature, NodeSummary,
+    ReferenceRow, SecurityMode, TreeChild,
 };
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,10 @@ pub enum UiAction {
     CopyNodeId(NodeId),
     CopyNodeValue,
     ClearSelection,
+    OpenMethodCall(NodeId),
+    CloseMethodCall,
+    MethodArgEdited { index: usize, value: String },
+    CallMethodConfirmed,
 }
 
 #[derive(Debug)]
@@ -68,5 +73,13 @@ pub enum UiUpdate {
         path: Vec<NodeId>,
     },
     RestoreSelection(NodeId),
+    MethodSignatureLoaded {
+        node: NodeId,
+        result: Result<MethodSignature, String>,
+    },
+    MethodCallFinished {
+        node: NodeId,
+        result: Result<MethodCallOutcome, String>,
+    },
     Log(LogLine),
 }

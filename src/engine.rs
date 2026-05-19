@@ -5,9 +5,9 @@ use tokio::sync::mpsc;
 
 use opcua::types::NodeId;
 
-use crate::client::UaClient;
+use crate::client::{UaClient, parse_variant};
 use crate::messages::{UiAction, UiUpdate};
-use crate::model::{AppModel, ConnectionState, DetailTab};
+use crate::model::{AppModel, ConnectionState, DetailTab, MethodCallState};
 use crate::types::{AuthSpec, EndpointInfo, ValueTree};
 
 #[derive(Debug, Clone, Copy)]
@@ -153,8 +153,70 @@ impl Engine {
                     }
                 }
             }
+            UiUpdate::MethodSignatureLoaded { node, result } => {
+                if !self.method_call_targets(&node) {
+                    return;
+                }
+                match result {
+                    Ok(signature) => {
+                        let n_inputs = signature.inputs.len();
+                        self.model.method_call = Some(MethodCallState::Inputs {
+                            node,
+                            signature,
+                            edited: vec![String::new(); n_inputs],
+                            field_errors: vec![None; n_inputs],
+                            call_error: None,
+                        });
+                    }
+                    Err(error) => {
+                        tracing::error!("read method signature {node} failed: {error}");
+                        self.model.method_call =
+                            Some(MethodCallState::Failed { node, error });
+                    }
+                }
+            }
+            UiUpdate::MethodCallFinished { node, result } => {
+                if !self.method_call_targets(&node) {
+                    return;
+                }
+                let Some(MethodCallState::Calling {
+                    node, signature, edited,
+                }) = self.model.method_call.take()
+                else {
+                    return;
+                };
+                match result {
+                    Ok(outcome) => {
+                        self.model.method_call = Some(MethodCallState::Result {
+                            node,
+                            signature,
+                            edited,
+                            outcome,
+                        });
+                    }
+                    Err(error) => {
+                        tracing::error!("call method {node} failed: {error}");
+                        let n_inputs = signature.inputs.len();
+                        self.model.method_call = Some(MethodCallState::Inputs {
+                            node,
+                            signature,
+                            edited,
+                            field_errors: vec![None; n_inputs],
+                            call_error: Some(error),
+                        });
+                    }
+                }
+            }
             UiUpdate::Log(line) => self.model.push_log(line),
         }
+    }
+
+    fn method_call_targets(&self, node: &NodeId) -> bool {
+        self.model
+            .method_call
+            .as_ref()
+            .map(|s| s.node() == node)
+            .unwrap_or(false)
     }
 
     pub fn dispatch<C: FrontendCtx>(&mut self, ctx: &C, action: UiAction) {
@@ -291,7 +353,114 @@ impl Engine {
                     tracing::warn!("ConfirmConnect with no endpoint selected");
                 }
             }
+            UiAction::OpenMethodCall(node) => self.open_method_call(ctx, node),
+            UiAction::CloseMethodCall => {
+                self.model.method_call = None;
+            }
+            UiAction::MethodArgEdited { index, value } => match self.model.method_call.as_mut() {
+                Some(MethodCallState::Inputs { edited, call_error, field_errors, .. }) => {
+                    if let Some(slot) = edited.get_mut(index) {
+                        *slot = value;
+                        *call_error = None;
+                        if let Some(err_slot) = field_errors.get_mut(index) {
+                            *err_slot = None;
+                        }
+                    }
+                }
+                Some(MethodCallState::Result { edited, .. }) => {
+                    if let Some(slot) = edited.get_mut(index) {
+                        *slot = value;
+                    }
+                }
+                _ => {}
+            },
+            UiAction::CallMethodConfirmed => self.confirm_method_call(ctx),
         }
+    }
+
+    fn open_method_call<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {
+        self.model.method_call = Some(MethodCallState::Loading { node: node.clone() });
+        self.spawn_method_signature(ctx, node);
+    }
+
+    fn confirm_method_call<C: FrontendCtx>(&mut self, ctx: &C) {
+        let (node, signature, edited) = match self.model.method_call.as_ref() {
+            Some(MethodCallState::Inputs {
+                node, signature, edited, ..
+            })
+            | Some(MethodCallState::Result {
+                node, signature, edited, ..
+            }) => (node.clone(), signature.clone(), edited.clone()),
+            _ => return,
+        };
+
+        let mut variants = Vec::with_capacity(signature.inputs.len());
+        let mut field_errors = vec![None; signature.inputs.len()];
+        let mut any_error = false;
+        for (i, arg) in signature.inputs.iter().enumerate() {
+            let s = edited.get(i).cloned().unwrap_or_default();
+            match parse_variant(&s, &arg.data_type, arg.value_rank) {
+                Ok(v) => variants.push(v),
+                Err(e) => {
+                    field_errors[i] = Some(e);
+                    any_error = true;
+                }
+            }
+        }
+        if any_error {
+            self.model.method_call = Some(MethodCallState::Inputs {
+                node,
+                signature,
+                edited,
+                field_errors,
+                call_error: None,
+            });
+            return;
+        }
+
+        let parent = signature.parent_object.clone();
+        let method = signature.method_node.clone();
+        self.model.method_call = Some(MethodCallState::Calling {
+            node: node.clone(),
+            signature,
+            edited,
+        });
+        self.spawn_method_call(ctx, parent, method, variants, node);
+    }
+
+    fn spawn_method_signature<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let result = client
+                .read_method_signature(&node)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::MethodSignatureLoaded { node, result });
+            ctx.request_repaint();
+        });
+    }
+
+    fn spawn_method_call<C: FrontendCtx>(
+        &self,
+        ctx: &C,
+        parent: NodeId,
+        method: NodeId,
+        inputs: Vec<opcua::types::Variant>,
+        node: NodeId,
+    ) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let result = client
+                .call_method(&parent, &method, inputs)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::MethodCallFinished { node, result });
+            ctx.request_repaint();
+        });
     }
 
     fn toggle_expand<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {

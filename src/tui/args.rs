@@ -1,24 +1,24 @@
 use std::process::ExitCode;
 
 #[derive(Debug, Default)]
-pub struct Args {
+pub struct TuiArgs {
     pub url: Option<String>,
     pub path: Option<String>,
 }
 
-pub enum ParseOutcome {
-    Run(Args),
+pub enum ArgParseResult {
+    Run(TuiArgs),
     Exit(ExitCode),
 }
 
-pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> ParseOutcome {
+pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> ArgParseResult {
     let mut iter = argv.into_iter();
     let _prog = iter.next();
-    let mut args = Args::default();
+    let mut args = TuiArgs::default();
     while let Some(arg) = iter.next() {
         if arg == "-h" || arg == "--help" {
             print_help();
-            return ParseOutcome::Exit(ExitCode::SUCCESS);
+            return ArgParseResult::Exit(ExitCode::SUCCESS);
         }
         if let Some(v) = arg.strip_prefix("--url=") {
             args.url = Some(v.to_owned());
@@ -40,16 +40,16 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> ParseOutcome {
             other => {
                 eprintln!("ua-tui: unknown argument: {other}");
                 eprintln!("Run `ua-tui --help` for usage.");
-                return ParseOutcome::Exit(ExitCode::FAILURE);
+                return ArgParseResult::Exit(ExitCode::FAILURE);
             }
         }
     }
-    ParseOutcome::Run(args)
+    ArgParseResult::Run(args)
 }
 
-fn missing_value(flag: &str) -> ParseOutcome {
+fn missing_value(flag: &str) -> ArgParseResult {
     eprintln!("ua-tui: {flag} requires a value");
-    ParseOutcome::Exit(ExitCode::FAILURE)
+    ArgParseResult::Exit(ExitCode::FAILURE)
 }
 
 fn print_help() {

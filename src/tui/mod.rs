@@ -2,6 +2,7 @@ pub mod args;
 mod endpoint_dialog;
 mod focus_frame;
 mod focus_gate;
+mod method_dialog;
 mod persist;
 
 use std::fmt::Write as _;
@@ -21,7 +22,7 @@ use opcua::types::NodeId;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use args::Args;
+use args::TuiArgs;
 use focus_frame::FocusFrame;
 use focus_gate::FocusGate;
 
@@ -50,7 +51,7 @@ const ID_REFS_GATE: &str = "refs_gate";
 pub fn run(
     mut engine: Engine,
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
-    args: Args,
+    args: TuiArgs,
 ) -> anyhow::Result<()> {
     let saved = persist::load();
     if let Some(url) = saved.endpoint_url {
@@ -94,6 +95,8 @@ pub fn run(
         last_applied_selection: None,
         cli_path: args.path,
         dialog_open: false,
+        method_dialog_open: false,
+        method_dialog_phase: None,
     });
     dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(&mut siv);
@@ -134,6 +137,8 @@ pub(super) struct TuiState {
     last_applied_selection: Option<NodeId>,
     cli_path: Option<String>,
     pub(super) dialog_open: bool,
+    pub(super) method_dialog_open: bool,
+    pub(super) method_dialog_phase: Option<method_dialog::MethodPhase>,
 }
 
 #[derive(Clone)]
@@ -157,9 +162,7 @@ impl CursiveCtx {
 
 impl FrontendCtx for CursiveCtx {
     fn request_repaint(&self) {
-        let _ = self
-            .cb_sink
-            .send(Box::new(|_siv: &mut Cursive| {}));
+        let _ = self.cb_sink.send(Box::new(|_siv: &mut Cursive| {}));
     }
 
     fn set_clipboard(&self, text: &str) {
@@ -247,6 +250,24 @@ fn sync_dialog(siv: &mut Cursive) {
         endpoint_dialog::close(siv);
     } else if want {
         endpoint_dialog::refresh(siv);
+    }
+    sync_method_dialog(siv);
+}
+
+fn sync_method_dialog(siv: &mut Cursive) {
+    let (want, have) = match siv.user_data::<TuiState>() {
+        Some(st) => (
+            st.engine.model.method_call.is_some(),
+            st.method_dialog_open,
+        ),
+        None => return,
+    };
+    if want && !have {
+        method_dialog::show(siv);
+    } else if !want && have {
+        method_dialog::close(siv);
+    } else if want {
+        method_dialog::refresh(siv);
     }
 }
 
@@ -363,10 +384,7 @@ fn build_connect_bar() -> impl cursive::view::View {
     let url_gate = gated(framed(url_edit, "URL").full_width(), ID_URL_GATE);
 
     let history_btn = cursive::views::Button::new("...", show_history_dropdown);
-    let history_gate = gated(
-        PaddedView::lrtb(0, 0, 1, 0, history_btn),
-        ID_HISTORY_GATE,
-    );
+    let history_gate = gated(PaddedView::lrtb(0, 0, 1, 0, history_btn), ID_HISTORY_GATE);
 
     let connect_btn = cursive::views::Button::new("Connect", |siv| {
         dispatch_action(siv, UiAction::ConnectClicked);
@@ -378,10 +396,7 @@ fn build_connect_bar() -> impl cursive::view::View {
     .with_name(ID_DISCONNECT_BTN);
     let quit_btn = cursive::views::Button::new("Quit", request_quit);
 
-    let connect_gate = gated(
-        PaddedView::lrtb(0, 0, 1, 0, connect_btn),
-        ID_CONNECT_GATE,
-    );
+    let connect_gate = gated(PaddedView::lrtb(0, 0, 1, 0, connect_btn), ID_CONNECT_GATE);
     let disconnect_gate = gated(
         PaddedView::lrtb(0, 0, 1, 0, disconnect_btn),
         ID_DISCONNECT_GATE,
@@ -506,6 +521,13 @@ fn install_global_keys(siv: &mut Cursive) {
         }
     });
     siv.add_global_callback('v', |s| dispatch_action(s, UiAction::CopyNodeValue));
+    siv.add_global_callback('c', |s| {
+        if let Some(node) = current_selection(s) {
+            dispatch_action(s, UiAction::OpenMethodCall(node));
+        } else {
+            tracing::warn!("no node selected; select a Method node first");
+        }
+    });
     siv.add_global_callback('?', show_help);
 }
 
@@ -527,6 +549,9 @@ Copy to clipboard (selected node):
   p                  Copy browse path (e.g. /Objects/Server)
   n                  Copy NodeId (e.g. ns=1;i=1234)
   v                  Copy Value attribute
+
+Method:
+  c                  Call selected Method (opens input dialog)
 
 Other:
   q / Ctrl+C         Quit (disconnects cleanly first)
@@ -637,10 +662,7 @@ fn refresh_title(siv: &mut Cursive, snap: &ModelSnapshot) {
     let state = match snap.connection {
         ConnectionState::Disconnected => "Disconnected".to_string(),
         ConnectionState::Connecting => "Connecting…".to_string(),
-        ConnectionState::Connected => match &snap.selected {
-            Some(n) => format!("Connected · {n}"),
-            None => "Connected".to_string(),
-        },
+        ConnectionState::Connected => "Connected".to_string(),
         ConnectionState::Disconnecting => "Disconnecting…".to_string(),
     };
     siv.call_on_name(ID_TITLE, |v: &mut TextView| {

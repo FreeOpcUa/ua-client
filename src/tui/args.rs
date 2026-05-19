@@ -19,6 +19,8 @@ use clap::Parser;
         n                  Copy NodeId of selected node\n  \
         v                  Copy Value attribute of selected node\n  \
         c                  Call selected Method (opens input dialog)\n  \
+        Alt+Left/Right     Resize tree width (when tree focused)\n  \
+        Alt+Up/Down        Resize attrs/refs split or log height (focus-dependent)\n  \
         q / Ctrl+C         Quit (disconnects cleanly first)\n  \
         ?                  Show in-app help"
 )]

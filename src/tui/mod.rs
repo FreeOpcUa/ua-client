@@ -13,10 +13,10 @@ use cursive::Cursive;
 use cursive::direction::Orientation;
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::Theme;
-use cursive::view::{Nameable, Resizable, Scrollable};
+use cursive::view::{Nameable, Resizable, Scrollable, SizeConstraint};
 use cursive::views::{
-    BoxedView, Dialog, DummyView, EditView, LinearLayout, OnEventView, PaddedView, ScrollView,
-    SelectView, TextView,
+    BoxedView, Dialog, DummyView, EditView, LinearLayout, OnEventView, PaddedView, ResizedView,
+    ScrollView, SelectView, TextView,
 };
 use opcua::types::NodeId;
 use tokio::runtime::Runtime;
@@ -47,6 +47,18 @@ const ID_DISCONNECT_GATE: &str = "disconnect_gate";
 const ID_TREE_GATE: &str = "tree_gate";
 const ID_ATTRS_GATE: &str = "attrs_gate";
 const ID_REFS_GATE: &str = "refs_gate";
+
+const ID_TREE_SIZE: &str = "tree_size";
+const ID_ATTRS_SIZE: &str = "attrs_size";
+const ID_LOG_SIZE: &str = "log_size";
+
+const DEFAULT_TREE_WIDTH: usize = 36;
+const DEFAULT_ATTRS_HEIGHT: usize = 12;
+const DEFAULT_LOG_HEIGHT: usize = 8;
+const MIN_TREE_WIDTH: usize = 12;
+const MAX_TREE_WIDTH: usize = 100;
+const MIN_PANE_HEIGHT: usize = 3;
+const MAX_PANE_HEIGHT: usize = 60;
 
 pub fn run(
     mut engine: Engine,
@@ -97,6 +109,10 @@ pub fn run(
         dialog_open: false,
         method_dialog_open: false,
         method_dialog_phase: None,
+        tree_width: DEFAULT_TREE_WIDTH,
+        attrs_height: DEFAULT_ATTRS_HEIGHT,
+        log_height: DEFAULT_LOG_HEIGHT,
+        sizes_initialized: false,
     });
     dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(&mut siv);
@@ -139,6 +155,10 @@ pub(super) struct TuiState {
     pub(super) dialog_open: bool,
     pub(super) method_dialog_open: bool,
     pub(super) method_dialog_phase: Option<method_dialog::MethodPhase>,
+    tree_width: usize,
+    attrs_height: usize,
+    log_height: usize,
+    sizes_initialized: bool,
 }
 
 #[derive(Clone)]
@@ -341,25 +361,132 @@ fn build_ui(siv: &mut Cursive) {
     let refs = build_refs_view();
     let log = build_log_view();
 
-    let detail_pane = LinearLayout::new(Orientation::Vertical)
-        .child(gated(framed(attrs, "Attributes"), ID_ATTRS_GATE))
-        .child(gated(framed(refs, "References"), ID_REFS_GATE));
+    let attrs_sized = ResizedView::new(
+        SizeConstraint::Full,
+        SizeConstraint::Fixed(DEFAULT_ATTRS_HEIGHT),
+        BoxedView::boxed(framed(attrs, "Attributes")),
+    )
+    .with_name(ID_ATTRS_SIZE);
+    let attrs_gate = gated(attrs_sized, ID_ATTRS_GATE);
+    let attrs_resizable = with_height_resize(attrs_gate);
 
-    let tree_frame = framed(tree, "Address Space").fixed_width(36);
-    let tree_gate = gated(tree_frame, ID_TREE_GATE);
+    let refs_gate = gated(framed(refs, "References"), ID_REFS_GATE);
+    let refs_resizable = with_height_resize(refs_gate).full_height();
+
+    let detail_pane = LinearLayout::new(Orientation::Vertical)
+        .child(attrs_resizable)
+        .child(refs_resizable);
+
+    let tree_sized = ResizedView::new(
+        SizeConstraint::Fixed(DEFAULT_TREE_WIDTH),
+        SizeConstraint::Full,
+        BoxedView::boxed(framed(tree, "Address Space")),
+    )
+    .with_name(ID_TREE_SIZE);
+    let tree_gate = gated(tree_sized, ID_TREE_GATE);
+    let tree_resizable = with_width_resize(tree_gate);
+
     let center = LinearLayout::new(Orientation::Horizontal)
-        .child(tree_gate)
+        .child(tree_resizable)
         .child(detail_pane.full_width());
 
-    let log_frame = framed(log, "Log").fixed_height(8);
+    let log_sized = ResizedView::new(
+        SizeConstraint::Full,
+        SizeConstraint::Fixed(DEFAULT_LOG_HEIGHT),
+        BoxedView::boxed(framed(log, "Log")),
+    )
+    .with_name(ID_LOG_SIZE);
+    let log_resizable = with_log_resize(log_sized);
 
     let root = LinearLayout::new(Orientation::Vertical)
         .child(title)
         .child(connect_bar)
         .child(center.full_height())
-        .child(log_frame);
+        .child(log_resizable);
 
     siv.add_fullscreen_layer(root.full_screen());
+}
+
+fn with_width_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V> {
+    OnEventView::new(view)
+        .on_pre_event(Event::Alt(Key::Left), |s| resize_tree(s, -2))
+        .on_pre_event(Event::Alt(Key::Right), |s| resize_tree(s, 2))
+}
+
+fn with_height_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V> {
+    OnEventView::new(view)
+        .on_pre_event(Event::Alt(Key::Up), |s| resize_attrs(s, -1))
+        .on_pre_event(Event::Alt(Key::Down), |s| resize_attrs(s, 1))
+}
+
+fn with_log_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V> {
+    OnEventView::new(view)
+        .on_pre_event(Event::Alt(Key::Up), |s| resize_log(s, 1))
+        .on_pre_event(Event::Alt(Key::Down), |s| resize_log(s, -1))
+}
+
+fn resize_tree(siv: &mut Cursive, delta: isize) {
+    let Some(width) = siv.user_data::<TuiState>().map(|st| {
+        let w = (st.tree_width as isize + delta).clamp(MIN_TREE_WIDTH as isize, MAX_TREE_WIDTH as isize) as usize;
+        st.tree_width = w;
+        w
+    }) else { return };
+    siv.call_on_name(ID_TREE_SIZE, |v: &mut ResizedView<BoxedView>| {
+        v.set_width(SizeConstraint::Fixed(width));
+    });
+}
+
+fn resize_attrs(siv: &mut Cursive, delta: isize) {
+    let Some(h) = siv.user_data::<TuiState>().map(|st| {
+        let h = (st.attrs_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        st.attrs_height = h;
+        h
+    }) else { return };
+    siv.call_on_name(ID_ATTRS_SIZE, |v: &mut ResizedView<BoxedView>| {
+        v.set_height(SizeConstraint::Fixed(h));
+    });
+}
+
+fn resize_log(siv: &mut Cursive, delta: isize) {
+    let Some(h) = siv.user_data::<TuiState>().map(|st| {
+        let h = (st.log_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        st.log_height = h;
+        h
+    }) else { return };
+    siv.call_on_name(ID_LOG_SIZE, |v: &mut ResizedView<BoxedView>| {
+        v.set_height(SizeConstraint::Fixed(h));
+    });
+}
+
+fn maybe_init_sizes(siv: &mut Cursive) {
+    let already = siv
+        .user_data::<TuiState>()
+        .map(|st| st.sizes_initialized)
+        .unwrap_or(true);
+    if already {
+        return;
+    }
+    let screen_height = siv.screen_size().y;
+    if screen_height == 0 {
+        return;
+    }
+    let log_height = siv
+        .user_data::<TuiState>()
+        .map(|st| st.log_height)
+        .unwrap_or(DEFAULT_LOG_HEIGHT);
+    // chrome: title (1) + connect_bar (3) + log + log frame (2) + 2x pane frame (4)
+    let chrome = 1 + 3 + log_height + 2 + 4;
+    let central = (screen_height as isize - chrome as isize).max(MIN_PANE_HEIGHT as isize * 2);
+    let attrs = (((central * 2) / 3) as usize)
+        .clamp(MIN_PANE_HEIGHT, (central as usize).saturating_sub(MIN_PANE_HEIGHT));
+
+    if let Some(st) = siv.user_data::<TuiState>() {
+        st.attrs_height = attrs;
+        st.sizes_initialized = true;
+    }
+    siv.call_on_name(ID_ATTRS_SIZE, |v: &mut ResizedView<BoxedView>| {
+        v.set_height(SizeConstraint::Fixed(attrs));
+    });
 }
 
 fn framed<V: cursive::view::View + 'static>(view: V, title: &str) -> FocusFrame<BoxedView> {
@@ -545,6 +672,11 @@ Navigation:
   Esc                Clear selection
   r                  Refresh selected node
 
+Resize (focus-dependent):
+  Alt+Left/Right     Tree pane width (when tree focused)
+  Alt+Up/Down        Attributes/References split (when attrs or refs focused)
+  Alt+Up/Down        Log height (when log focused)
+
 Copy to clipboard (selected node):
   p                  Copy browse path (e.g. /Objects/Server)
   n                  Copy NodeId (e.g. ns=1;i=1234)
@@ -566,6 +698,7 @@ struct TreeItem {
 }
 
 fn refresh_all(siv: &mut Cursive) {
+    maybe_init_sizes(siv);
     let snapshot = siv
         .user_data::<TuiState>()
         .map(|st| snapshot_model(&st.engine.model));

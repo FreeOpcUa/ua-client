@@ -249,6 +249,9 @@ fn build_result_body(
             layout.add_child(
                 TextView::new(server_err.to_string()).with_name(arg_error_id(i)),
             );
+            if !arg.description.is_empty() {
+                layout.add_child(TextView::new(format!("    {}", arg.description)));
+            }
         }
     }
 

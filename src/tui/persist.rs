@@ -3,6 +3,22 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::{AuthMode, SecurityMode};
+
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct ConnectionSelection {
+    #[serde(default)]
+    pub auth_mode: AuthMode,
+    #[serde(default)]
+    pub security_mode: SecurityMode,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub cert_path: String,
+    #[serde(default)]
+    pub key_path: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct SavedState {
     #[serde(default)]
@@ -14,6 +30,11 @@ pub struct SavedState {
     /// file is human-readable and stable across serde versions.
     #[serde(default)]
     pub last_selection_paths: HashMap<String, Vec<String>>,
+    /// Map of endpoint URL → last-used connection dialog selections
+    /// (auth mode, security mode, username, cert/key paths). Passwords are
+    /// not persisted.
+    #[serde(default)]
+    pub last_connection_selections: HashMap<String, ConnectionSelection>,
 }
 
 pub fn load() -> SavedState {

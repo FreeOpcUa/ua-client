@@ -104,9 +104,19 @@ pub struct AppModel {
     pub auth_cert_path: String,
     pub auth_key_path: String,
     pub last_selection_paths: HashMap<String, Vec<NodeId>>,
+    pub last_connection_selections: HashMap<String, ConnectionPrefs>,
     pub endpoint_mode_filter: SecurityMode,
     pub file_picker_open: bool,
     pub method_call: Option<MethodCallState>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionPrefs {
+    pub auth_mode: AuthMode,
+    pub security_mode: SecurityMode,
+    pub username: String,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 impl Default for AppModel {
@@ -133,6 +143,7 @@ impl Default for AppModel {
             auth_cert_path: String::new(),
             auth_key_path: String::new(),
             last_selection_paths: HashMap::new(),
+            last_connection_selections: HashMap::new(),
             endpoint_mode_filter: SecurityMode::None,
             file_picker_open: false,
             method_call: None,
@@ -163,7 +174,28 @@ impl AppModel {
             return;
         }
         self.endpoint_history.retain(|u| u != &url);
-        self.endpoint_history.insert(0, url);
+        self.endpoint_history.insert(0, url.clone());
         self.endpoint_history.truncate(MAX_HISTORY);
+        self.last_connection_selections.insert(
+            url,
+            ConnectionPrefs {
+                auth_mode: self.auth_mode,
+                security_mode: self.endpoint_mode_filter,
+                username: self.auth_username.clone(),
+                cert_path: self.auth_cert_path.clone(),
+                key_path: self.auth_key_path.clone(),
+            },
+        );
+    }
+
+    pub fn apply_saved_connection_prefs(&mut self) {
+        let Some(prefs) = self.last_connection_selections.get(&self.endpoint_url).cloned() else {
+            return;
+        };
+        self.auth_mode = prefs.auth_mode;
+        self.endpoint_mode_filter = prefs.security_mode;
+        self.auth_username = prefs.username;
+        self.auth_cert_path = prefs.cert_path;
+        self.auth_key_path = prefs.key_path;
     }
 }

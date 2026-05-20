@@ -28,7 +28,7 @@ use focus_gate::FocusGate;
 
 use crate::engine::{Engine, FilePickTarget, FrontendCtx};
 use crate::messages::{UiAction, UiUpdate};
-use crate::model::{AppModel, ConnectionState, DetailTab};
+use crate::model::{AppModel, ConnectionPrefs, ConnectionState, DetailTab};
 use crate::types::LogLevel;
 
 const ID_URL: &str = "url";
@@ -82,10 +82,26 @@ pub fn run(
             engine.model.last_selection_paths.insert(url, path);
         }
     }
+    for (url, sel) in saved.last_connection_selections {
+        engine.model.last_connection_selections.insert(
+            url,
+            ConnectionPrefs {
+                auth_mode: sel.auth_mode,
+                security_mode: sel.security_mode,
+                username: sel.username,
+                cert_path: sel.cert_path,
+                key_path: sel.key_path,
+            },
+        );
+    }
+    engine.model.apply_saved_connection_prefs();
     if let Some(url) = args.url.as_ref() {
         engine.model.endpoint_url = url.clone();
-        // CLI override beats saved selection
-        engine.model.last_selection_paths.remove(url);
+        engine.model.apply_saved_connection_prefs();
+        if args.path.is_some() {
+            // --path overrides saved selection
+            engine.model.last_selection_paths.remove(url);
+        }
     }
     let auto_connect = args.url.is_some() || args.path.is_some();
 
@@ -137,12 +153,32 @@ fn save_state(siv: &mut Cursive) {
         .iter()
         .map(|(url, path)| (url.clone(), path.iter().map(|n| n.to_string()).collect()))
         .collect();
+    let selections: std::collections::HashMap<String, persist::ConnectionSelection> = st
+        .engine
+        .model
+        .last_connection_selections
+        .iter()
+        .map(|(url, prefs)| {
+            (
+                url.clone(),
+                persist::ConnectionSelection {
+                    auth_mode: prefs.auth_mode,
+                    security_mode: prefs.security_mode,
+                    username: prefs.username.clone(),
+                    cert_path: prefs.cert_path.clone(),
+                    key_path: prefs.key_path.clone(),
+                },
+            )
+        })
+        .collect();
     persist::save(&persist::SavedState {
         endpoint_url: Some(st.engine.model.endpoint_url.clone()),
         endpoint_history: st.engine.model.endpoint_history.clone(),
         last_selection_paths: paths,
+        last_connection_selections: selections,
     });
 }
+
 
 pub(super) struct TuiState {
     pub(super) engine: Engine,

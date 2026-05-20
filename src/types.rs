@@ -75,7 +75,7 @@ pub struct AuthSpec {
     pub key_path: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum AuthMode {
     #[default]
     Anonymous,
@@ -83,8 +83,9 @@ pub enum AuthMode {
     Certificate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SecurityMode {
+    #[default]
     None,
     Sign,
     SignAndEncrypt,

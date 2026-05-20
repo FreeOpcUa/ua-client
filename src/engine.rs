@@ -227,6 +227,7 @@ impl Engine {
                     self.model.discovered_endpoints = None;
                     self.model.selected_endpoint = None;
                     self.model.endpoints_loading = false;
+                    self.model.apply_saved_connection_prefs();
                 }
             }
             UiAction::TabSelected(t) => {

@@ -10,6 +10,7 @@ use std::sync::Mutex;
 
 use cursive::CbSink;
 use cursive::Cursive;
+use cursive::CursiveRunnable;
 use cursive::direction::Orientation;
 use cursive::event::{Event, EventResult, Key};
 use cursive::theme::Theme;
@@ -65,25 +66,55 @@ pub fn run(
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
     args: TuiArgs,
 ) -> anyhow::Result<()> {
+    restore_persisted_state(&mut engine.model);
+    apply_cli_overrides(&mut engine.model, &args);
+    let auto_connect = args.url.is_some() || args.path.is_some();
+
+    let (mut siv, ctx) = build_cursive(&engine.rt, update_rx);
+    siv.set_user_data(TuiState::new(engine, ctx, args.path));
+
+    bootstrap_session(&mut siv, auto_connect);
+    siv.run();
+    save_state(&mut siv);
+    final_disconnect(&mut siv);
+    Ok(())
+}
+
+fn restore_persisted_state(model: &mut AppModel) {
     let saved = persist::load();
     if let Some(url) = saved.endpoint_url {
-        engine.model.endpoint_url = url;
+        model.endpoint_url = url;
     }
     if !saved.endpoint_history.is_empty() {
-        engine.model.endpoint_history = saved.endpoint_history;
+        model.endpoint_history = saved.endpoint_history;
     }
-    for (url, ids) in saved.last_selection_paths {
-        use std::str::FromStr;
+    restore_selection_paths(model, saved.last_selection_paths);
+    restore_connection_prefs(model, saved.last_connection_selections);
+    model.apply_saved_connection_prefs();
+}
+
+fn restore_selection_paths(
+    model: &mut AppModel,
+    raw: std::collections::HashMap<String, Vec<String>>,
+) {
+    use std::str::FromStr;
+    for (url, ids) in raw {
         let path: Vec<NodeId> = ids
             .iter()
             .filter_map(|s| NodeId::from_str(s).ok())
             .collect();
         if !path.is_empty() {
-            engine.model.last_selection_paths.insert(url, path);
+            model.last_selection_paths.insert(url, path);
         }
     }
-    for (url, sel) in saved.last_connection_selections {
-        engine.model.last_connection_selections.insert(
+}
+
+fn restore_connection_prefs(
+    model: &mut AppModel,
+    raw: std::collections::HashMap<String, persist::ConnectionSelection>,
+) {
+    for (url, sel) in raw {
+        model.last_connection_selections.insert(
             url,
             ConnectionPrefs {
                 auth_mode: sel.auth_mode,
@@ -94,52 +125,38 @@ pub fn run(
             },
         );
     }
-    engine.model.apply_saved_connection_prefs();
-    if let Some(url) = args.url.as_ref() {
-        engine.model.endpoint_url = url.clone();
-        engine.model.apply_saved_connection_prefs();
-        if args.path.is_some() {
-            // --path overrides saved selection
-            engine.model.last_selection_paths.remove(url);
-        }
-    }
-    let auto_connect = args.url.is_some() || args.path.is_some();
+}
 
+fn apply_cli_overrides(model: &mut AppModel, args: &TuiArgs) {
+    let Some(url) = args.url.as_ref() else { return };
+    model.endpoint_url = url.clone();
+    model.apply_saved_connection_prefs();
+    if args.path.is_some() {
+        // --path overrides the URL's saved last-selected node
+        model.last_selection_paths.remove(url);
+    }
+}
+
+fn build_cursive(
+    rt: &Runtime,
+    update_rx: mpsc::UnboundedReceiver<UiUpdate>,
+) -> (CursiveRunnable, CursiveCtx) {
     let mut siv = cursive::default();
     siv.set_theme(make_theme());
     let cb_sink = siv.cb_sink().clone();
     let ctx = CursiveCtx::new(cb_sink.clone());
-
-    start_update_pump(&engine.rt, update_rx, cb_sink);
+    start_update_pump(rt, update_rx, cb_sink);
     build_ui(&mut siv);
     install_global_keys(&mut siv);
+    (siv, ctx)
+}
 
-    siv.set_user_data(TuiState {
-        engine,
-        ctx,
-        pending_quit: false,
-        quit_scheduled: false,
-        last_connection: ConnectionState::Disconnected,
-        last_applied_selection: None,
-        cli_path: args.path,
-        dialog_open: false,
-        method_dialog_open: false,
-        method_dialog_phase: None,
-        tree_width: DEFAULT_TREE_WIDTH,
-        attrs_height: DEFAULT_ATTRS_HEIGHT,
-        log_height: DEFAULT_LOG_HEIGHT,
-        sizes_initialized: false,
-    });
-    dispatch_action(&mut siv, UiAction::TabSelected(DetailTab::References));
-    refresh_all(&mut siv);
+fn bootstrap_session(siv: &mut Cursive, auto_connect: bool) {
+    dispatch_action(siv, UiAction::TabSelected(DetailTab::References));
+    refresh_all(siv);
     if auto_connect {
-        dispatch_action(&mut siv, UiAction::ConnectClicked);
+        dispatch_action(siv, UiAction::ConnectClicked);
     }
-
-    siv.run();
-    save_state(&mut siv);
-    final_disconnect(&mut siv);
-    Ok(())
 }
 
 fn save_state(siv: &mut Cursive) {
@@ -195,6 +212,27 @@ pub(super) struct TuiState {
     attrs_height: usize,
     log_height: usize,
     sizes_initialized: bool,
+}
+
+impl TuiState {
+    fn new(engine: Engine, ctx: CursiveCtx, cli_path: Option<String>) -> Self {
+        Self {
+            engine,
+            ctx,
+            cli_path,
+            pending_quit: false,
+            quit_scheduled: false,
+            last_connection: ConnectionState::Disconnected,
+            last_applied_selection: None,
+            dialog_open: false,
+            method_dialog_open: false,
+            method_dialog_phase: None,
+            tree_width: DEFAULT_TREE_WIDTH,
+            attrs_height: DEFAULT_ATTRS_HEIGHT,
+            log_height: DEFAULT_LOG_HEIGHT,
+            sizes_initialized: false,
+        }
+    }
 }
 
 #[derive(Clone)]

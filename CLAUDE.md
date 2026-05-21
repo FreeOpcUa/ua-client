@@ -37,21 +37,21 @@ Three invariants:
 
 ## Modules
 
-| File | Role |
-|---|---|
-| `src/main.rs` | eframe entry, builds tokio Runtime and tracing layer |
-| `src/app.rs` | `UaApp: eframe::App` — Update step, channel plumbing, `save()` for persistence |
-| `src/model.rs` | `AppModel`, `TreeModel`, `ConnectionState`, `DetailTab` |
-| `src/messages.rs` | `UiAction` (View→Update), `UiUpdate` (async→Update) |
-| `src/client.rs` | `UaClient` async OPC UA bridge |
-| `src/types.rs` | Plain data crossing the channel boundary |
-| `src/logger.rs` | tracing `Layer` that emits `UiUpdate::Log` |
-| `src/ui/mod.rs` | Panel layout (top URI bar, left tree, bottom log, central split) |
-| `src/ui/connect_bar.rs` | URI textbox + history dropdown + Connect/Disconnect |
-| `src/ui/tree.rs` | Lazy-loaded address-space tree |
-| `src/ui/node_summary.rs` | Upper-right summary widget |
-| `src/ui/tabs.rs` | Lower-right tabs: Attributes / Events / Data Changes / References (only References implemented) |
-| `src/ui/log_panel.rs` | Bottom log |
+| File                     | Role                                                                                            |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `src/main.rs`            | eframe entry, builds tokio Runtime and tracing layer                                            |
+| `src/app.rs`             | `UaApp: eframe::App` — Update step, channel plumbing, `save()` for persistence                  |
+| `src/model.rs`           | `AppModel`, `TreeModel`, `ConnectionState`, `DetailTab`                                         |
+| `src/messages.rs`        | `UiAction` (View→Update), `UiUpdate` (async→Update)                                             |
+| `src/client.rs`          | `UaClient` async OPC UA bridge                                                                  |
+| `src/types.rs`           | Plain data crossing the channel boundary                                                        |
+| `src/logger.rs`          | tracing `Layer` that emits `UiUpdate::Log`                                                      |
+| `src/ui/mod.rs`          | Panel layout (top URI bar, left tree, bottom log, central split)                                |
+| `src/ui/connect_bar.rs`  | URI textbox + history dropdown + Connect/Disconnect                                             |
+| `src/ui/tree.rs`         | Lazy-loaded address-space tree                                                                  |
+| `src/ui/node_summary.rs` | Upper-right summary widget                                                                      |
+| `src/ui/tabs.rs`         | Lower-right tabs: Attributes / Events / Data Changes / References (only References implemented) |
+| `src/ui/log_panel.rs`    | Bottom log                                                                                      |
 
 ## Adding async work
 
@@ -85,3 +85,4 @@ If you add new persisted state, put `pub const STORAGE_*` keys near the top of `
 - Plain types in `types.rs` use `derive(Debug, Clone)`. Persisted types add `serde::{Serialize, Deserialize}` only on the fields actually saved (currently `endpoint_url: String` and `endpoint_history: Vec<String>` — both stdlib types, no custom derive needed).
 - Tracing: targets are crate-scoped; default filter is `info,opcua=info,ua_client=debug`. Override via `RUST_LOG`.
 - The address-space root is `NodeId::new(0, ObjectId::RootFolder as u32)` — set on `AppModel::default()`.
+- Default to writing no comments. Only add one when the _why_ is non-obvious — a hidden constraint, a subtle invariant, a workaround for a specific bug, or behavior that would surprise a reader. Well-named identifiers should already convey _what_ the code does.

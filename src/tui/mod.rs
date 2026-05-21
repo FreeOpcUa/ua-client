@@ -68,12 +68,11 @@ pub fn run(
 ) -> anyhow::Result<()> {
     restore_persisted_state(&mut engine.model);
     apply_cli_overrides(&mut engine.model, &args);
-    let auto_connect = args.url.is_some() || args.path.is_some();
 
     let (mut siv, ctx) = build_cursive(&engine.rt, update_rx);
     siv.set_user_data(TuiState::new(engine, ctx, args.path));
 
-    bootstrap_session(&mut siv, auto_connect);
+    bootstrap_session(&mut siv);
     siv.run();
     save_state(&mut siv);
     final_disconnect(&mut siv);
@@ -132,7 +131,6 @@ fn apply_cli_overrides(model: &mut AppModel, args: &TuiArgs) {
     model.endpoint_url = url.clone();
     model.apply_saved_connection_prefs();
     if args.path.is_some() {
-        // --path overrides the URL's saved last-selected node
         model.last_selection_paths.remove(url);
     }
 }
@@ -151,12 +149,9 @@ fn build_cursive(
     (siv, ctx)
 }
 
-fn bootstrap_session(siv: &mut Cursive, auto_connect: bool) {
+fn bootstrap_session(siv: &mut Cursive) {
     dispatch_action(siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(siv);
-    if auto_connect {
-        dispatch_action(siv, UiAction::ConnectClicked);
-    }
 }
 
 fn save_state(siv: &mut Cursive) {

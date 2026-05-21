@@ -25,15 +25,14 @@ use clap::Parser;
         ?                  Show in-app help"
 )]
 pub struct TuiArgs {
-    /// OPC UA endpoint URL (e.g. opc.tcp://localhost:4855). When set, the
-    /// TUI auto-connects on startup.
-    #[arg(long, value_name = "URL")]
+    /// OPC UA endpoint URL (e.g. opc.tcp://localhost:4855). Pre-fills the
+    /// URL field; you still press Connect to connect.
+    #[arg(long, visible_alias = "endpoint", value_name = "URL")]
     pub url: Option<String>,
 
-    /// Browse to this path after connecting. Slash-separated BrowseNames
+    /// Browse to this path once you connect. Slash-separated BrowseNames
     /// starting from the address-space root, e.g. /Objects/Server/ServerStatus.
-    /// Segments may use 'ns=N:Name' for non-default namespaces. Implies
-    /// auto-connect.
+    /// Segments may use 'ns=N:Name' for non-default namespaces.
     #[arg(long, value_name = "PATH")]
     pub path: Option<String>,
 }

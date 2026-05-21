@@ -61,6 +61,10 @@ const MAX_TREE_WIDTH: usize = 100;
 const MIN_PANE_HEIGHT: usize = 3;
 const MAX_PANE_HEIGHT: usize = 60;
 
+const TITLE_HEIGHT: usize = 1;
+const CONNECT_BAR_HEIGHT: usize = 3;
+const FRAME_BORDER_HEIGHT: usize = 2;
+
 pub fn run(
     mut engine: Engine,
     update_rx: mpsc::UnboundedReceiver<UiUpdate>,
@@ -543,8 +547,9 @@ fn maybe_init_sizes(siv: &mut Cursive) {
         .user_data::<TuiState>()
         .map(|st| st.log_height)
         .unwrap_or(DEFAULT_LOG_HEIGHT);
-    // chrome: title (1) + connect_bar (3) + log + log frame (2) + 2x pane frame (4)
-    let chrome = 1 + 3 + log_height + 2 + 4;
+    let log_pane = log_height + FRAME_BORDER_HEIGHT;
+    let attrs_and_refs_borders = 2 * FRAME_BORDER_HEIGHT;
+    let chrome = TITLE_HEIGHT + CONNECT_BAR_HEIGHT + log_pane + attrs_and_refs_borders;
     let central = (screen_height as isize - chrome as isize).max(MIN_PANE_HEIGHT as isize * 2);
     let attrs = (((central * 2) / 3) as usize)
         .clamp(MIN_PANE_HEIGHT, (central as usize).saturating_sub(MIN_PANE_HEIGHT));

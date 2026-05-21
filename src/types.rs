@@ -30,7 +30,6 @@ pub enum ValueTree {
 }
 
 impl ValueTree {
-    /// Render this value on a single line.
     pub fn format_inline(&self) -> String {
         use std::fmt::Write as _;
         fn write(v: &ValueTree, out: &mut String) {

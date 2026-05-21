@@ -13,7 +13,9 @@ use cursive::Cursive;
 use cursive::CursiveRunnable;
 use cursive::direction::Orientation;
 use cursive::event::{Event, EventResult, Key};
+use cursive::style::{BaseColor, Color, ColorStyle, Effect, Effects, Style};
 use cursive::theme::Theme;
+use cursive::utils::markup::StyledString;
 use cursive::view::{Nameable, Resizable, Scrollable, SizeConstraint};
 use cursive::views::{
     BoxedView, Dialog, DummyView, EditView, LinearLayout, OnEventView, PaddedView, ResizedView,
@@ -37,6 +39,7 @@ const ID_TITLE: &str = "title";
 const ID_TREE: &str = "tree";
 const ID_ATTRS: &str = "attrs";
 const ID_REFS: &str = "refs";
+const ID_SUBS: &str = "subs";
 const ID_LOG: &str = "log";
 const ID_CONNECT_BTN: &str = "connect_btn";
 const ID_DISCONNECT_BTN: &str = "disconnect_btn";
@@ -48,13 +51,16 @@ const ID_DISCONNECT_GATE: &str = "disconnect_gate";
 const ID_TREE_GATE: &str = "tree_gate";
 const ID_ATTRS_GATE: &str = "attrs_gate";
 const ID_REFS_GATE: &str = "refs_gate";
+const ID_SUBS_GATE: &str = "subs_gate";
 
 const ID_TREE_SIZE: &str = "tree_size";
 const ID_ATTRS_SIZE: &str = "attrs_size";
+const ID_SUBS_SIZE: &str = "subs_size";
 const ID_LOG_SIZE: &str = "log_size";
 
 const DEFAULT_TREE_WIDTH: usize = 36;
 const DEFAULT_ATTRS_HEIGHT: usize = 12;
+const DEFAULT_SUBS_HEIGHT: usize = 8;
 const DEFAULT_LOG_HEIGHT: usize = 8;
 const MIN_TREE_WIDTH: usize = 12;
 const MAX_TREE_WIDTH: usize = 100;
@@ -209,6 +215,7 @@ pub(super) struct TuiState {
     pub(super) method_dialog_phase: Option<method_dialog::MethodPhase>,
     tree_width: usize,
     attrs_height: usize,
+    subs_height: usize,
     log_height: usize,
     sizes_initialized: bool,
 }
@@ -228,6 +235,7 @@ impl TuiState {
             method_dialog_phase: None,
             tree_width: DEFAULT_TREE_WIDTH,
             attrs_height: DEFAULT_ATTRS_HEIGHT,
+            subs_height: DEFAULT_SUBS_HEIGHT,
             log_height: DEFAULT_LOG_HEIGHT,
             sizes_initialized: false,
         }
@@ -432,6 +440,7 @@ fn build_ui(siv: &mut Cursive) {
     let tree = build_tree_view();
     let attrs = build_attrs_view();
     let refs = build_refs_view();
+    let subs = build_subs_view();
     let log = build_log_view();
 
     let attrs_sized = ResizedView::new(
@@ -446,9 +455,19 @@ fn build_ui(siv: &mut Cursive) {
     let refs_gate = gated(framed(refs, "References"), ID_REFS_GATE);
     let refs_resizable = with_height_resize(refs_gate).full_height();
 
+    let subs_sized = ResizedView::new(
+        SizeConstraint::Full,
+        SizeConstraint::Fixed(DEFAULT_SUBS_HEIGHT),
+        BoxedView::boxed(framed(subs, "Subscriptions")),
+    )
+    .with_name(ID_SUBS_SIZE);
+    let subs_gate = gated(subs_sized, ID_SUBS_GATE);
+    let subs_resizable = with_subs_resize(subs_gate);
+
     let detail_pane = LinearLayout::new(Orientation::Vertical)
         .child(attrs_resizable)
-        .child(refs_resizable);
+        .child(refs_resizable)
+        .child(subs_resizable);
 
     let tree_sized = ResizedView::new(
         SizeConstraint::Fixed(DEFAULT_TREE_WIDTH),
@@ -496,6 +515,23 @@ fn with_log_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V> 
     OnEventView::new(view)
         .on_pre_event(Event::Alt(Key::Up), |s| resize_log(s, 1))
         .on_pre_event(Event::Alt(Key::Down), |s| resize_log(s, -1))
+}
+
+fn with_subs_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V> {
+    OnEventView::new(view)
+        .on_pre_event(Event::Alt(Key::Up), |s| resize_subs(s, -1))
+        .on_pre_event(Event::Alt(Key::Down), |s| resize_subs(s, 1))
+}
+
+fn resize_subs(siv: &mut Cursive, delta: isize) {
+    let Some(h) = siv.user_data::<TuiState>().map(|st| {
+        let h = (st.subs_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        st.subs_height = h;
+        h
+    }) else { return };
+    siv.call_on_name(ID_SUBS_SIZE, |v: &mut ResizedView<BoxedView>| {
+        v.set_height(SizeConstraint::Fixed(h));
+    });
 }
 
 fn resize_tree(siv: &mut Cursive, delta: isize) {
@@ -694,6 +730,17 @@ fn build_refs_view() -> impl cursive::view::View {
         .scrollable()
 }
 
+fn build_subs_view() -> impl cursive::view::View {
+    SelectView::<NodeId>::new()
+        .on_submit(|siv, target: &NodeId| {
+            if !target.is_null() {
+                dispatch_action(siv, UiAction::NodeSelected(target.clone()));
+            }
+        })
+        .with_name(ID_SUBS)
+        .scrollable()
+}
+
 fn build_log_view() -> impl cursive::view::View {
     let inner: ScrollView<TextView> = TextView::new("").scrollable();
     inner
@@ -729,6 +776,26 @@ fn install_global_keys(siv: &mut Cursive) {
             tracing::warn!("no node selected; select a Method node first");
         }
     });
+    siv.add_global_callback('s', |s| {
+        let Some(node) = current_selection(s) else {
+            tracing::warn!("no node selected; press Enter on a tree node first");
+            return;
+        };
+        dispatch_action(s, UiAction::Subscribe(node));
+    });
+    siv.add_global_callback('S', |s| {
+        let Some(node) = current_selection(s) else {
+            return;
+        };
+        let subscribed = s
+            .user_data::<TuiState>()
+            .map(|st| st.engine.model.subscriptions.iter().any(|r| r.node_id == node))
+            .unwrap_or(false);
+        if !subscribed {
+            return;
+        }
+        dispatch_action(s, UiAction::Unsubscribe(node));
+    });
     siv.add_global_callback('?', show_help);
 }
 
@@ -759,6 +826,10 @@ Copy to clipboard (selected node):
 Method:
   c                  Call selected Method (opens input dialog)
 
+Subscriptions:
+  s                  Subscribe to selected node (live value in Subscriptions pane)
+  Shift+s            Unsubscribe selected node
+
 Other:
   q / Ctrl+C         Quit (disconnects cleanly first)
   ?                  This help";
@@ -782,6 +853,7 @@ fn refresh_all(siv: &mut Cursive) {
     refresh_tree(siv, &snap);
     refresh_attrs(siv, &snap);
     refresh_refs(siv, &snap);
+    refresh_subs(siv, &snap);
     refresh_log(siv, &snap);
     refresh_focus_gates(siv, &snap);
     track_connection_change(siv);
@@ -799,6 +871,7 @@ fn refresh_focus_gates(siv: &mut Cursive, snap: &ModelSnapshot) {
     set_gate(siv, ID_TREE_GATE, connected);
     set_gate(siv, ID_ATTRS_GATE, connected);
     set_gate(siv, ID_REFS_GATE, connected);
+    set_gate(siv, ID_SUBS_GATE, connected);
 }
 
 fn set_gate(siv: &mut Cursive, name: &str, enabled: bool) {
@@ -839,16 +912,22 @@ struct ModelSnapshot {
     attrs_text: String,
     refs_rows: Vec<RefRow>,
     refs_loading: bool,
+    subs_rows: Vec<SubRow>,
     log_text: String,
 }
 
 struct TreeRow {
     item: TreeItem,
-    label: String,
+    label: StyledString,
 }
 
 struct RefRow {
     target: NodeId,
+    label: String,
+}
+
+struct SubRow {
+    node_id: NodeId,
     label: String,
 }
 
@@ -861,6 +940,7 @@ fn snapshot_model(model: &AppModel) -> ModelSnapshot {
         attrs_text: build_attrs_text(model),
         refs_rows: build_refs_rows(model),
         refs_loading: model.references_loading,
+        subs_rows: build_subs_rows(model),
         log_text: build_log_text(model),
     }
 }
@@ -946,6 +1026,25 @@ fn refresh_refs(siv: &mut Cursive, snap: &ModelSnapshot) {
     });
 }
 
+fn refresh_subs(siv: &mut Cursive, snap: &ModelSnapshot) {
+    siv.call_on_name(ID_SUBS, |v: &mut SelectView<NodeId>| {
+        let cursor = v.selection().map(|n| (*n).clone());
+        v.clear();
+        if snap.subs_rows.is_empty() {
+            v.add_item("(no subscriptions — press s on a node to subscribe)", NodeId::null());
+            return;
+        }
+        for row in &snap.subs_rows {
+            v.add_item(row.label.clone(), row.node_id.clone());
+        }
+        if let Some(c) = cursor
+            && let Some(idx) = snap.subs_rows.iter().position(|r| r.node_id == c)
+        {
+            v.set_selection(idx);
+        }
+    });
+}
+
 fn refresh_log(siv: &mut Cursive, snap: &ModelSnapshot) {
     siv.call_on_name(ID_LOG, |v: &mut ScrollView<TextView>| {
         v.get_inner_mut().set_content(snap.log_text.clone());
@@ -957,6 +1056,7 @@ fn build_tree_rows(model: &AppModel) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let label = "Root".to_string();
     let root = model.root_node.clone();
+    let selected = model.selected.as_ref();
     let has_children = model
         .tree
         .children
@@ -968,13 +1068,25 @@ fn build_tree_rows(model: &AppModel) -> Vec<TreeRow> {
             node_id: root.clone(),
             has_children,
         },
-        label: format_row(0, model.tree.expanded.contains(&root), has_children, &label),
+        label: format_row(
+            0,
+            model.tree.expanded.contains(&root),
+            has_children,
+            selected == Some(&root),
+            &label,
+        ),
     });
-    push_children(model, &root, 1, &mut rows);
+    push_children(model, &root, 1, selected, &mut rows);
     rows
 }
 
-fn push_children(model: &AppModel, parent: &NodeId, depth: usize, rows: &mut Vec<TreeRow>) {
+fn push_children(
+    model: &AppModel,
+    parent: &NodeId,
+    depth: usize,
+    selected: Option<&NodeId>,
+    rows: &mut Vec<TreeRow>,
+) {
     if !model.tree.expanded.contains(parent) {
         return;
     }
@@ -985,14 +1097,21 @@ fn push_children(model: &AppModel, parent: &NodeId, depth: usize, rows: &mut Vec
                     node_id: parent.clone(),
                     has_children: false,
                 },
-                label: format!("{}(loading…)", indent(depth)),
+                label: StyledString::plain(format!("{}(loading…)", indent(depth))),
             });
         }
         return;
     };
     for child in children {
         let expanded = model.tree.expanded.contains(&child.node_id);
-        let label = format_row(depth, expanded, child.has_children, &child.display_name);
+        let is_selected = selected == Some(&child.node_id);
+        let label = format_row(
+            depth,
+            expanded,
+            child.has_children,
+            is_selected,
+            &child.display_name,
+        );
         rows.push(TreeRow {
             item: TreeItem {
                 node_id: child.node_id.clone(),
@@ -1001,20 +1120,38 @@ fn push_children(model: &AppModel, parent: &NodeId, depth: usize, rows: &mut Vec
             label,
         });
         if expanded {
-            push_children(model, &child.node_id, depth + 1, rows);
+            push_children(model, &child.node_id, depth + 1, selected, rows);
         }
     }
 }
 
-fn format_row(depth: usize, expanded: bool, has_children: bool, label: &str) -> String {
-    let marker = if !has_children {
+fn format_row(
+    depth: usize,
+    expanded: bool,
+    has_children: bool,
+    selected: bool,
+    label: &str,
+) -> StyledString {
+    let arrow = if !has_children {
         "  "
     } else if expanded {
         "▾ "
     } else {
         "▸ "
     };
-    format!("{}{marker}{label}", indent(depth))
+    let text = format!("{}{arrow}{label}", indent(depth));
+    if selected {
+        StyledString::styled(text, selected_row_style())
+    } else {
+        StyledString::plain(text)
+    }
+}
+
+fn selected_row_style() -> Style {
+    Style {
+        effects: Effects::only(Effect::Bold),
+        color: ColorStyle::front(Color::Light(BaseColor::Cyan)),
+    }
 }
 
 fn indent(depth: usize) -> String {
@@ -1080,6 +1217,53 @@ fn build_refs_rows(model: &AppModel) -> Vec<RefRow> {
             }
         })
         .collect()
+}
+
+fn build_subs_rows(model: &AppModel) -> Vec<SubRow> {
+    if model.subscriptions.is_empty() {
+        return Vec::new();
+    }
+    let name_width = model
+        .subscriptions
+        .iter()
+        .map(|r| r.display_name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let value_width = model
+        .subscriptions
+        .iter()
+        .map(|r| r.value.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(40);
+    model
+        .subscriptions
+        .iter()
+        .map(|r| {
+            let ts = r.timestamp.as_deref().unwrap_or("");
+            let label = format!(
+                "{:<name_w$}  {:<val_w$}  {}",
+                r.display_name,
+                truncate(&r.value, 40),
+                ts,
+                name_w = name_width,
+                val_w = value_width,
+            );
+            SubRow {
+                node_id: r.node_id.clone(),
+                label,
+            }
+        })
+        .collect()
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 fn build_log_text(model: &AppModel) -> String {

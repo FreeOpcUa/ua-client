@@ -37,6 +37,8 @@ pub enum UiAction {
     CloseMethodCall,
     MethodArgEdited { index: usize, value: String },
     CallMethodConfirmed,
+    Subscribe(NodeId),
+    Unsubscribe(NodeId),
 }
 
 #[derive(Debug)]
@@ -80,6 +82,20 @@ pub enum UiUpdate {
     MethodCallFinished {
         node: NodeId,
         result: Result<MethodCallOutcome, String>,
+    },
+    SubscribeFinished {
+        node: NodeId,
+        result: Result<String, String>,
+    },
+    UnsubscribeFinished {
+        node: NodeId,
+        result: Result<(), String>,
+    },
+    DataChange {
+        node: NodeId,
+        value: String,
+        status: String,
+        timestamp: Option<String>,
     },
     Log(LogLine),
 }

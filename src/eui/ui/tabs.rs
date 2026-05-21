@@ -7,6 +7,7 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         tab_button(ui, model, actions, DetailTab::Attributes, "Attributes");
         tab_button(ui, model, actions, DetailTab::Events, "Events");
         tab_button(ui, model, actions, DetailTab::DataChanges, "Data Changes");
+        tab_button(ui, model, actions, DetailTab::Subscriptions, "Subscriptions");
         tab_button(ui, model, actions, DetailTab::References, "References");
     });
     ui.separator();
@@ -16,7 +17,45 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         DetailTab::Attributes => draw_todo(ui, "Attributes tab — coming next."),
         DetailTab::Events => draw_todo(ui, "Events tab — coming next."),
         DetailTab::DataChanges => draw_todo(ui, "Data Changes tab — coming next."),
+        DetailTab::Subscriptions => draw_subscriptions(model, ui),
     }
+}
+
+fn draw_subscriptions(model: &AppModel, ui: &mut egui::Ui) {
+    if model.subscriptions.is_empty() {
+        ui.label(
+            egui::RichText::new("Press `s` on a node in the tree to subscribe. Shift+s to unsubscribe.")
+                .italics()
+                .weak(),
+        );
+        return;
+    }
+
+    egui::ScrollArea::both().show(ui, |ui| {
+        use egui_extras::{Column, TableBuilder};
+        TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .column(Column::auto().at_least(160.0))
+            .column(Column::remainder().at_least(180.0))
+            .column(Column::auto().at_least(160.0))
+            .header(20.0, |mut header| {
+                header.col(|ui| { ui.strong("DisplayName"); });
+                header.col(|ui| { ui.strong("Value"); });
+                header.col(|ui| { ui.strong("Timestamp"); });
+            })
+            .body(|mut body| {
+                for r in &model.subscriptions {
+                    body.row(18.0, |mut row| {
+                        row.col(|ui| { ui.label(&r.display_name); });
+                        row.col(|ui| { ui.label(&r.value); });
+                        row.col(|ui| {
+                            ui.label(r.timestamp.as_deref().unwrap_or(""));
+                        });
+                    });
+                }
+            });
+    });
 }
 
 fn tab_button(

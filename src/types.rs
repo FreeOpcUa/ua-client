@@ -138,6 +138,15 @@ pub struct MethodCallOutcome {
 }
 
 #[derive(Debug, Clone)]
+pub struct SubscriptionRow {
+    pub node_id: NodeId,
+    pub display_name: String,
+    pub value: String,
+    pub status: String,
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReferenceRow {
     pub reference_type: String,
     pub is_forward: bool,

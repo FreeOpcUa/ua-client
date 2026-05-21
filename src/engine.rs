@@ -8,7 +8,7 @@ use opcua::types::NodeId;
 use crate::client::{UaClient, parse_variant};
 use crate::messages::{UiAction, UiUpdate};
 use crate::model::{AppModel, ConnectionState, DetailTab, MethodCallState};
-use crate::types::{AuthSpec, EndpointInfo, ValueTree};
+use crate::types::{AuthSpec, EndpointInfo, SubscriptionRow, ValueTree};
 
 #[derive(Debug, Clone, Copy)]
 pub enum FilePickTarget {
@@ -207,6 +207,48 @@ impl Engine {
                     }
                 }
             }
+            UiUpdate::SubscribeFinished { node, result } => match result {
+                Ok(display_name) => {
+                    self.model.subscribing.remove(&node);
+                    if !self.model.subscriptions.iter().any(|r| r.node_id == node) {
+                        self.model.subscriptions.push(SubscriptionRow {
+                            node_id: node,
+                            display_name,
+                            value: "<pending>".to_string(),
+                            status: String::new(),
+                            timestamp: None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    self.model.subscribing.remove(&node);
+                    tracing::error!("subscribe {node} failed: {e}");
+                }
+            },
+            UiUpdate::UnsubscribeFinished { node, result } => {
+                self.model.subscribing.remove(&node);
+                self.model.subscriptions.retain(|r| r.node_id != node);
+                if let Err(e) = result {
+                    tracing::error!("unsubscribe {node} failed: {e}");
+                }
+            }
+            UiUpdate::DataChange {
+                node,
+                value,
+                status,
+                timestamp,
+            } => {
+                if let Some(row) = self
+                    .model
+                    .subscriptions
+                    .iter_mut()
+                    .find(|r| r.node_id == node)
+                {
+                    row.value = value;
+                    row.status = status;
+                    row.timestamp = timestamp;
+                }
+            }
             UiUpdate::Log(line) => self.model.push_log(line),
         }
     }
@@ -376,6 +418,16 @@ impl Engine {
                 _ => {}
             },
             UiAction::CallMethodConfirmed => self.confirm_method_call(ctx),
+            UiAction::Subscribe(node) => {
+                if self.model.subscribing.insert(node.clone()) {
+                    self.spawn_subscribe(ctx, node);
+                }
+            }
+            UiAction::Unsubscribe(node) => {
+                if self.model.subscribing.insert(node.clone()) {
+                    self.spawn_unsubscribe(ctx, node);
+                }
+            }
         }
     }
 
@@ -694,6 +746,32 @@ impl Engine {
         self.rt.spawn(async move {
             let r = client.browse_path(&node).await.map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::PathReady { node, path: r });
+            ctx.request_repaint();
+        });
+    }
+
+    fn spawn_subscribe<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        let data_tx = self.update_tx.clone();
+        self.rt.spawn(async move {
+            let result = client
+                .subscribe(node.clone(), data_tx)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::SubscribeFinished { node, result });
+            ctx.request_repaint();
+        });
+    }
+
+    fn spawn_unsubscribe<C: FrontendCtx>(&self, ctx: &C, node: NodeId) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let result = client.unsubscribe(&node).await.map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::UnsubscribeFinished { node, result });
             ctx.request_repaint();
         });
     }

@@ -13,9 +13,27 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         return;
     }
 
+    handle_subscribe_keys(model, ui, actions);
+
     egui::ScrollArea::vertical().show(ui, |ui| {
         draw_root(model, ui, actions);
     });
+}
+
+fn handle_subscribe_keys(model: &AppModel, ui: &egui::Ui, actions: &mut Vec<UiAction>) {
+    let Some(node) = model.selected.as_ref() else {
+        return;
+    };
+    if model.subscribing.contains(node) {
+        return;
+    }
+    let unsubscribe = ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::S));
+    let subscribe = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::S));
+    if unsubscribe && model.subscriptions.iter().any(|r| r.node_id == *node) {
+        actions.push(UiAction::Unsubscribe(node.clone()));
+    } else if subscribe {
+        actions.push(UiAction::Subscribe(node.clone()));
+    }
 }
 
 fn draw_root(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {

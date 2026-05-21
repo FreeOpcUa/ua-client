@@ -4,7 +4,7 @@ use opcua::types::{NodeId, ObjectId};
 
 use crate::types::{
     AuthMode, EndpointInfo, LogLine, MethodCallOutcome, MethodSignature, NodeSummary, ReferenceRow,
-    SecurityMode, TreeChild,
+    SecurityMode, SubscriptionRow, TreeChild,
 };
 
 #[derive(Debug, Clone)]
@@ -64,6 +64,7 @@ pub enum DetailTab {
     Attributes,
     Events,
     DataChanges,
+    Subscriptions,
     References,
 }
 
@@ -108,6 +109,8 @@ pub struct AppModel {
     pub endpoint_mode_filter: SecurityMode,
     pub file_picker_open: bool,
     pub method_call: Option<MethodCallState>,
+    pub subscriptions: Vec<SubscriptionRow>,
+    pub subscribing: HashSet<NodeId>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -147,6 +150,8 @@ impl Default for AppModel {
             endpoint_mode_filter: SecurityMode::None,
             file_picker_open: false,
             method_call: None,
+            subscriptions: Vec::new(),
+            subscribing: HashSet::new(),
         }
     }
 }
@@ -166,6 +171,8 @@ impl AppModel {
         self.references = None;
         self.references_loading = false;
         self.method_call = None;
+        self.subscriptions.clear();
+        self.subscribing.clear();
     }
 
     pub fn record_successful_connection(&mut self) {

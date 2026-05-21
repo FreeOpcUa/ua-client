@@ -1,22 +1,28 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use opcua::client::custom_types::DataTypeTreeBuilder;
-use opcua::client::{ClientBuilder, IdentityToken, Session};
+use opcua::client::{ClientBuilder, DataChangeCallback, IdentityToken, Session};
 use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
 use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
     Argument, Array, AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
     CallMethodRequest, DataTypeId, DataValue, EndpointDescription, ExpandedNodeId, Guid,
-    Identifier, MessageSecurityMode, NodeClass, NodeClassMask, NodeId, QualifiedName, ReadValueId,
+    Identifier, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
+    MonitoringParameters, NodeClass, NodeClassMask, NodeId, QualifiedName, ReadValueId,
     ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, TryFromVariant,
     TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId,
 };
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+use crate::messages::UiUpdate;
 
 use crate::types::{
     AuthMode, AuthSpec, EndpointInfo, MethodArgument, MethodCallOutcome, MethodSignature,
@@ -26,6 +32,13 @@ use crate::types::{
 struct Connected {
     session: Arc<Session>,
     event_loop: JoinHandle<StatusCode>,
+    sub: Option<SubState>,
+}
+
+struct SubState {
+    sub_id: u32,
+    items: HashMap<NodeId, u32>,
+    next_handle: u32,
 }
 
 enum State {
@@ -163,6 +176,7 @@ impl UaClient {
         *guard = State::Connected(Connected {
             session,
             event_loop: handle,
+            sub: None,
         });
         Ok(())
     }
@@ -450,6 +464,119 @@ impl UaClient {
             outputs,
             input_arg_errors,
         })
+    }
+
+    pub async fn subscribe(
+        &self,
+        node: NodeId,
+        tx: mpsc::UnboundedSender<UiUpdate>,
+    ) -> Result<String> {
+        let mut guard = self.state.lock().await;
+        let connected = match &mut *guard {
+            State::Connected(c) => c,
+            State::Disconnected => return Err(anyhow!("not connected")),
+        };
+        let session = connected.session.clone();
+
+        if connected.sub.is_none() {
+            let session_for_cb = session.clone();
+            let tx_for_cb = tx.clone();
+            let callback = DataChangeCallback::new(move |dv, item| {
+                let node = item.item_to_monitor().node_id.clone();
+                let (value, status, timestamp) = format_data_change(&session_for_cb, &dv);
+                let _ = tx_for_cb.send(UiUpdate::DataChange {
+                    node,
+                    value,
+                    status,
+                    timestamp,
+                });
+            });
+            let sub_id = session
+                .create_subscription(Duration::from_millis(500), 1200, 100, 0, 0, true, callback)
+                .await
+                .map_err(|s| anyhow!("create_subscription failed: {s}"))?;
+            connected.sub = Some(SubState {
+                sub_id,
+                items: HashMap::new(),
+                next_handle: 1,
+            });
+        }
+
+        let sub = connected.sub.as_mut().unwrap();
+        if sub.items.contains_key(&node) {
+            drop(guard);
+            let name = read_display_name(&session, &node).await.unwrap_or_else(|_| node.to_string());
+            return Ok(name);
+        }
+        let handle = sub.next_handle;
+        sub.next_handle = sub.next_handle.wrapping_add(1).max(1);
+        let sub_id = sub.sub_id;
+
+        let request = MonitoredItemCreateRequest {
+            item_to_monitor: ReadValueId {
+                node_id: node.clone(),
+                attribute_id: AttributeId::Value as u32,
+                ..Default::default()
+            },
+            monitoring_mode: MonitoringMode::Reporting,
+            requested_parameters: MonitoringParameters {
+                client_handle: handle,
+                sampling_interval: 0.0,
+                queue_size: 10,
+                discard_oldest: true,
+                ..Default::default()
+            },
+        };
+
+        let results = session
+            .create_monitored_items(sub_id, TimestampsToReturn::Both, vec![request])
+            .await
+            .map_err(|s| anyhow!("create_monitored_items failed: {s}"))?;
+        let created = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("empty create_monitored_items result"))?;
+        let mi_status = created.result.status_code;
+        if !mi_status.is_good() {
+            return Err(anyhow!("monitored item rejected: {mi_status}"));
+        }
+        let mi_id = created.result.monitored_item_id;
+        sub.items.insert(node.clone(), mi_id);
+        drop(guard);
+
+        let name = read_display_name(&session, &node).await.unwrap_or_else(|_| node.to_string());
+        Ok(name)
+    }
+
+    pub async fn unsubscribe(&self, node: &NodeId) -> Result<()> {
+        let mut guard = self.state.lock().await;
+        let connected = match &mut *guard {
+            State::Connected(c) => c,
+            State::Disconnected => return Err(anyhow!("not connected")),
+        };
+        let session = connected.session.clone();
+        let Some(sub) = connected.sub.as_mut() else {
+            return Err(anyhow!("no active subscription"));
+        };
+        let Some(mi_id) = sub.items.remove(node) else {
+            return Err(anyhow!("node {node} is not subscribed"));
+        };
+        let sub_id = sub.sub_id;
+        let items_empty = sub.items.is_empty();
+
+        session
+            .delete_monitored_items(sub_id, &[mi_id])
+            .await
+            .map_err(|s| anyhow!("delete_monitored_items failed: {s}"))?;
+
+        if items_empty {
+            connected.sub = None;
+            session
+                .delete_subscription(sub_id)
+                .await
+                .map_err(|s| anyhow!("delete_subscription failed: {s}"))?;
+        }
+        Ok(())
     }
 
     pub async fn browse_references(&self, node_id: &NodeId) -> Result<Vec<ReferenceRow>> {
@@ -1084,6 +1211,16 @@ fn format_attribute_value(attr: AttributeId, v: &Variant, session: &Session) -> 
         return ValueTree::Leaf(format!("{nc:?}"));
     }
     variant_to_tree(session, v)
+}
+
+fn format_data_change(session: &Session, dv: &DataValue) -> (String, String, Option<String>) {
+    let value = match dv.value.as_ref() {
+        Some(v) => variant_to_tree(session, v).format_inline(),
+        None => "<null>".to_string(),
+    };
+    let status = dv.status.map(|s| s.to_string()).unwrap_or_default();
+    let timestamp = dv.source_timestamp.as_ref().map(|t| t.to_string());
+    (value, status, timestamp)
 }
 
 fn variant_to_tree(session: &Session, v: &Variant) -> ValueTree {

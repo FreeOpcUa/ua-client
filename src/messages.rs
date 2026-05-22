@@ -3,7 +3,7 @@ use opcua::types::NodeId;
 use crate::model::DetailTab;
 use crate::types::{
     AuthMode, EndpointInfo, LogLine, MethodCallOutcome, MethodSignature, NodeSummary,
-    ReferenceRow, SecurityMode, TreeChild,
+    ReferenceRow, SecurityMode, TreeChild, WriteTarget,
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +39,10 @@ pub enum UiAction {
     CallMethodConfirmed,
     Subscribe(NodeId),
     Unsubscribe(NodeId),
+    OpenAttributeEdit { node: NodeId, attr_name: String },
+    CloseAttributeEdit,
+    AttributeValueEdited(String),
+    ConfirmAttributeEdit,
 }
 
 #[derive(Debug)]
@@ -96,6 +100,16 @@ pub enum UiUpdate {
         value: String,
         status: String,
         timestamp: Option<String>,
+    },
+    AttributeEditTargetLoaded {
+        node: NodeId,
+        attr_name: String,
+        result: Result<WriteTarget, String>,
+    },
+    AttributeWriteFinished {
+        node: NodeId,
+        attr_name: String,
+        result: Result<(), String>,
     },
     Log(LogLine),
 }

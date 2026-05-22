@@ -138,6 +138,14 @@ pub struct MethodCallOutcome {
 }
 
 #[derive(Debug, Clone)]
+pub struct WriteTarget {
+    pub data_type: NodeId,
+    pub value_rank: i32,
+    pub type_label: String,
+    pub current_value: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct SubscriptionRow {
     pub node_id: NodeId,
     pub display_name: String,

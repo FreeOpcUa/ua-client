@@ -1,4 +1,5 @@
 pub mod args;
+mod attr_edit_dialog;
 mod endpoint_dialog;
 mod focus_frame;
 mod focus_gate;
@@ -213,6 +214,8 @@ pub(super) struct TuiState {
     pub(super) dialog_open: bool,
     pub(super) method_dialog_open: bool,
     pub(super) method_dialog_phase: Option<method_dialog::MethodPhase>,
+    pub(super) attr_edit_dialog_open: bool,
+    pub(super) attr_edit_dialog_phase: Option<attr_edit_dialog::AttrEditPhase>,
     tree_width: usize,
     attrs_height: usize,
     subs_height: usize,
@@ -233,6 +236,8 @@ impl TuiState {
             dialog_open: false,
             method_dialog_open: false,
             method_dialog_phase: None,
+            attr_edit_dialog_open: false,
+            attr_edit_dialog_phase: None,
             tree_width: DEFAULT_TREE_WIDTH,
             attrs_height: DEFAULT_ATTRS_HEIGHT,
             subs_height: DEFAULT_SUBS_HEIGHT,
@@ -369,6 +374,24 @@ fn sync_method_dialog(siv: &mut Cursive) {
         method_dialog::close(siv);
     } else if want {
         method_dialog::refresh(siv);
+    }
+    sync_attr_edit_dialog(siv);
+}
+
+fn sync_attr_edit_dialog(siv: &mut Cursive) {
+    let (want, have) = match siv.user_data::<TuiState>() {
+        Some(st) => (
+            st.engine.model.attr_edit.is_some(),
+            st.attr_edit_dialog_open,
+        ),
+        None => return,
+    };
+    if want && !have {
+        attr_edit_dialog::show(siv);
+    } else if !want && have {
+        attr_edit_dialog::close(siv);
+    } else if want {
+        attr_edit_dialog::refresh(siv);
     }
 }
 
@@ -716,7 +739,7 @@ fn build_tree_view() -> impl cursive::view::View {
 }
 
 fn build_attrs_view() -> impl cursive::view::View {
-    TextView::new("Select a node to view its attributes.")
+    SelectView::<String>::new()
         .with_name(ID_ATTRS)
         .scrollable()
 }
@@ -796,12 +819,31 @@ fn install_global_keys(siv: &mut Cursive) {
         }
         dispatch_action(s, UiAction::Unsubscribe(node));
     });
+    siv.add_global_callback('e', |s| {
+        let Some(node) = current_selection(s) else {
+            tracing::warn!("no node selected; press Enter on a tree node first");
+            return;
+        };
+        let Some(attr_name) = attr_cursor_name(s) else {
+            tracing::warn!("no attribute under cursor in Attributes pane");
+            return;
+        };
+        dispatch_action(s, UiAction::OpenAttributeEdit { node, attr_name });
+    });
     siv.add_global_callback('?', show_help);
 }
 
 fn current_selection(siv: &mut Cursive) -> Option<NodeId> {
     siv.user_data::<TuiState>()
         .and_then(|st| st.engine.model.selected.clone())
+}
+
+fn attr_cursor_name(siv: &mut Cursive) -> Option<String> {
+    siv.call_on_name(ID_ATTRS, |v: &mut SelectView<String>| {
+        v.selection().map(|s| (*s).clone())
+    })
+    .flatten()
+    .filter(|s| !s.is_empty())
 }
 
 fn show_help(siv: &mut Cursive) {
@@ -829,6 +871,10 @@ Method:
 Subscriptions:
   s                  Subscribe to selected node (live value in Subscriptions pane)
   Shift+s            Unsubscribe selected node
+
+Attribute editing:
+  e                  Edit the attribute under the Attributes pane cursor
+                     (only Value is writable for now)
 
 Other:
   q / Ctrl+C         Quit (disconnects cleanly first)
@@ -909,7 +955,8 @@ struct ModelSnapshot {
     connection: ConnectionState,
     tree_rows: Vec<TreeRow>,
     selected: Option<NodeId>,
-    attrs_text: String,
+    attrs_rows: Vec<AttrRow>,
+    attrs_empty_text: String,
     refs_rows: Vec<RefRow>,
     refs_loading: bool,
     subs_rows: Vec<SubRow>,
@@ -931,13 +978,20 @@ struct SubRow {
     label: String,
 }
 
+struct AttrRow {
+    attr_name: String,
+    label: String,
+}
+
 fn snapshot_model(model: &AppModel) -> ModelSnapshot {
+    let (attrs_rows, attrs_empty_text) = build_attrs_rows(model);
     ModelSnapshot {
         endpoint_url: model.endpoint_url.clone(),
         connection: model.connection,
         tree_rows: build_tree_rows(model),
         selected: model.selected.clone(),
-        attrs_text: build_attrs_text(model),
+        attrs_rows,
+        attrs_empty_text,
         refs_rows: build_refs_rows(model),
         refs_loading: model.references_loading,
         subs_rows: build_subs_rows(model),
@@ -1005,8 +1059,21 @@ fn refresh_tree(siv: &mut Cursive, snap: &ModelSnapshot) {
 }
 
 fn refresh_attrs(siv: &mut Cursive, snap: &ModelSnapshot) {
-    siv.call_on_name(ID_ATTRS, |v: &mut TextView| {
-        v.set_content(snap.attrs_text.clone());
+    siv.call_on_name(ID_ATTRS, |v: &mut SelectView<String>| {
+        let cursor = v.selection().map(|n| (*n).clone());
+        v.clear();
+        if snap.attrs_rows.is_empty() {
+            v.add_item(snap.attrs_empty_text.clone(), String::new());
+            return;
+        }
+        for row in &snap.attrs_rows {
+            v.add_item(row.label.clone(), row.attr_name.clone());
+        }
+        if let Some(c) = cursor
+            && let Some(idx) = snap.attrs_rows.iter().position(|r| r.attr_name == c)
+        {
+            v.set_selection(idx);
+        }
     });
 }
 
@@ -1158,12 +1225,14 @@ fn indent(depth: usize) -> String {
     "  ".repeat(depth)
 }
 
-fn build_attrs_text(model: &AppModel) -> String {
+fn build_attrs_rows(model: &AppModel) -> (Vec<AttrRow>, String) {
     let Some(summary) = model.node_summary.as_ref() else {
-        if model.selected.is_some() {
-            return "Loading attributes…".to_string();
-        }
-        return "Select a node in the tree to view its attributes.".to_string();
+        let empty = if model.selected.is_some() {
+            "Loading attributes…".to_string()
+        } else {
+            "Select a node in the tree to view its attributes.".to_string()
+        };
+        return (Vec::new(), empty);
     };
     let name_width = summary
         .attributes
@@ -1171,19 +1240,15 @@ fn build_attrs_text(model: &AppModel) -> String {
         .map(|a| a.name.chars().count())
         .max()
         .unwrap_or(0);
-    let mut out = String::new();
-    let _ = writeln!(out, "Node: {}", summary.node_id);
-    out.push('\n');
-    for attr in &summary.attributes {
-        let _ = writeln!(
-            out,
-            "{:<width$} : {}",
-            attr.name,
-            attr.value.format_inline(),
-            width = name_width
-        );
-    }
-    out
+    let rows = summary
+        .attributes
+        .iter()
+        .map(|a| AttrRow {
+            attr_name: a.name.clone(),
+            label: format!("{:<width$} : {}", a.name, a.value.format_inline(), width = name_width),
+        })
+        .collect();
+    (rows, String::new())
 }
 
 fn build_refs_rows(model: &AppModel) -> Vec<RefRow> {

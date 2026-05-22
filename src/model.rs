@@ -4,7 +4,7 @@ use opcua::types::{NodeId, ObjectId};
 
 use crate::types::{
     AuthMode, EndpointInfo, LogLine, MethodCallOutcome, MethodSignature, NodeSummary, ReferenceRow,
-    SecurityMode, SubscriptionRow, TreeChild,
+    SecurityMode, SubscriptionRow, TreeChild, WriteTarget,
 };
 
 #[derive(Debug, Clone)]
@@ -44,6 +44,53 @@ impl MethodCallState {
             | MethodCallState::Inputs { node, .. }
             | MethodCallState::Calling { node, .. }
             | MethodCallState::Result { node, .. } => node,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AttributeEditState {
+    Loading {
+        node: NodeId,
+        attr_name: String,
+    },
+    Failed {
+        node: NodeId,
+        attr_name: String,
+        error: String,
+    },
+    Inputs {
+        node: NodeId,
+        attr_name: String,
+        target: WriteTarget,
+        edited: String,
+        field_error: Option<String>,
+        write_error: Option<String>,
+    },
+    Writing {
+        node: NodeId,
+        attr_name: String,
+        target: WriteTarget,
+        edited: String,
+    },
+}
+
+impl AttributeEditState {
+    pub fn node(&self) -> &NodeId {
+        match self {
+            AttributeEditState::Loading { node, .. }
+            | AttributeEditState::Failed { node, .. }
+            | AttributeEditState::Inputs { node, .. }
+            | AttributeEditState::Writing { node, .. } => node,
+        }
+    }
+
+    pub fn attr_name(&self) -> &str {
+        match self {
+            AttributeEditState::Loading { attr_name, .. }
+            | AttributeEditState::Failed { attr_name, .. }
+            | AttributeEditState::Inputs { attr_name, .. }
+            | AttributeEditState::Writing { attr_name, .. } => attr_name,
         }
     }
 }
@@ -111,6 +158,7 @@ pub struct AppModel {
     pub method_call: Option<MethodCallState>,
     pub subscriptions: Vec<SubscriptionRow>,
     pub subscribing: HashSet<NodeId>,
+    pub attr_edit: Option<AttributeEditState>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -152,6 +200,7 @@ impl Default for AppModel {
             method_call: None,
             subscriptions: Vec::new(),
             subscribing: HashSet::new(),
+            attr_edit: None,
         }
     }
 }
@@ -173,6 +222,7 @@ impl AppModel {
         self.method_call = None;
         self.subscriptions.clear();
         self.subscribing.clear();
+        self.attr_edit = None;
     }
 
     pub fn record_successful_connection(&mut self) {

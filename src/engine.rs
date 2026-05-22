@@ -7,7 +7,7 @@ use opcua::types::NodeId;
 
 use crate::client::{UaClient, parse_variant};
 use crate::messages::{UiAction, UiUpdate};
-use crate::model::{AppModel, ConnectionState, DetailTab, MethodCallState};
+use crate::model::{AppModel, AttributeEditState, ConnectionState, DetailTab, MethodCallState};
 use crate::types::{AuthSpec, EndpointInfo, SubscriptionRow, ValueTree};
 
 #[derive(Debug, Clone, Copy)]
@@ -249,8 +249,83 @@ impl Engine {
                     row.timestamp = timestamp;
                 }
             }
+            UiUpdate::AttributeEditTargetLoaded {
+                node,
+                attr_name,
+                result,
+            } => {
+                if !self.attr_edit_targets(&node, &attr_name) {
+                    return;
+                }
+                match result {
+                    Ok(target) => {
+                        let edited = target.current_value.clone();
+                        self.model.attr_edit = Some(AttributeEditState::Inputs {
+                            node,
+                            attr_name,
+                            target,
+                            edited,
+                            field_error: None,
+                            write_error: None,
+                        });
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            "read write target {node} {attr_name} failed: {error}"
+                        );
+                        self.model.attr_edit = Some(AttributeEditState::Failed {
+                            node,
+                            attr_name,
+                            error,
+                        });
+                    }
+                }
+            }
+            UiUpdate::AttributeWriteFinished {
+                node,
+                attr_name,
+                result,
+            } => {
+                if !self.attr_edit_targets(&node, &attr_name) {
+                    return;
+                }
+                match result {
+                    Ok(()) => {
+                        self.model.attr_edit = None;
+                        self.spawn_node_summary(ctx, node);
+                    }
+                    Err(error) => {
+                        tracing::error!("write {node} {attr_name} failed: {error}");
+                        let Some(AttributeEditState::Writing {
+                            node,
+                            attr_name,
+                            target,
+                            edited,
+                        }) = self.model.attr_edit.take()
+                        else {
+                            return;
+                        };
+                        self.model.attr_edit = Some(AttributeEditState::Inputs {
+                            node,
+                            attr_name,
+                            target,
+                            edited,
+                            field_error: None,
+                            write_error: Some(error),
+                        });
+                    }
+                }
+            }
             UiUpdate::Log(line) => self.model.push_log(line),
         }
+    }
+
+    fn attr_edit_targets(&self, node: &NodeId, attr_name: &str) -> bool {
+        self.model
+            .attr_edit
+            .as_ref()
+            .map(|s| s.node() == node && s.attr_name() == attr_name)
+            .unwrap_or(false)
     }
 
     fn method_call_targets(&self, node: &NodeId) -> bool {
@@ -428,7 +503,122 @@ impl Engine {
                     self.spawn_unsubscribe(ctx, node);
                 }
             }
+            UiAction::OpenAttributeEdit { node, attr_name } => {
+                self.open_attribute_edit(ctx, node, attr_name);
+            }
+            UiAction::CloseAttributeEdit => {
+                self.model.attr_edit = None;
+            }
+            UiAction::AttributeValueEdited(s) => {
+                if let Some(AttributeEditState::Inputs {
+                    edited,
+                    field_error,
+                    write_error,
+                    ..
+                }) = self.model.attr_edit.as_mut()
+                {
+                    *edited = s;
+                    *field_error = None;
+                    *write_error = None;
+                }
+            }
+            UiAction::ConfirmAttributeEdit => self.confirm_attribute_edit(ctx),
         }
+    }
+
+    fn open_attribute_edit<C: FrontendCtx>(
+        &mut self,
+        ctx: &C,
+        node: NodeId,
+        attr_name: String,
+    ) {
+        self.model.attr_edit = Some(AttributeEditState::Loading {
+            node: node.clone(),
+            attr_name: attr_name.clone(),
+        });
+        self.spawn_read_write_target(ctx, node, attr_name);
+    }
+
+    fn confirm_attribute_edit<C: FrontendCtx>(&mut self, ctx: &C) {
+        let Some(AttributeEditState::Inputs {
+            node,
+            attr_name,
+            target,
+            edited,
+            ..
+        }) = self.model.attr_edit.as_ref()
+        else {
+            return;
+        };
+        let value = match parse_variant(edited, &target.data_type, target.value_rank) {
+            Ok(v) => v,
+            Err(e) => {
+                if let Some(AttributeEditState::Inputs { field_error, .. }) =
+                    self.model.attr_edit.as_mut()
+                {
+                    *field_error = Some(e);
+                }
+                return;
+            }
+        };
+        let node = node.clone();
+        let attr_name = attr_name.clone();
+        let target = target.clone();
+        let edited = edited.clone();
+        self.model.attr_edit = Some(AttributeEditState::Writing {
+            node: node.clone(),
+            attr_name: attr_name.clone(),
+            target,
+            edited,
+        });
+        self.spawn_write_value(ctx, node, attr_name, value);
+    }
+
+    fn spawn_read_write_target<C: FrontendCtx>(
+        &self,
+        ctx: &C,
+        node: NodeId,
+        attr_name: String,
+    ) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let result = client
+                .read_write_target(&node, &attr_name)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::AttributeEditTargetLoaded {
+                node,
+                attr_name,
+                result,
+            });
+            ctx.request_repaint();
+        });
+    }
+
+    fn spawn_write_value<C: FrontendCtx>(
+        &self,
+        ctx: &C,
+        node: NodeId,
+        attr_name: String,
+        value: opcua::types::Variant,
+    ) {
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            let result = client
+                .write_value(&node, value)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(UiUpdate::AttributeWriteFinished {
+                node,
+                attr_name,
+                result,
+            });
+            ctx.request_repaint();
+        });
     }
 
     fn open_method_call<C: FrontendCtx>(&mut self, ctx: &C, node: NodeId) {

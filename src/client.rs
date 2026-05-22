@@ -14,9 +14,9 @@ use opcua::types::{
     Argument, Array, AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
     CallMethodRequest, DataTypeId, DataValue, EndpointDescription, ExpandedNodeId, Guid,
     Identifier, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
-    MonitoringParameters, NodeClass, NodeClassMask, NodeId, QualifiedName, ReadValueId,
-    ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn, TryFromVariant,
-    TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId,
+    MonitoringParameters, NodeClass, NodeClassMask, NodeId, NumericRange, QualifiedName,
+    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn,
+    TryFromVariant, TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId, WriteValue,
 };
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -26,7 +26,7 @@ use crate::messages::UiUpdate;
 
 use crate::types::{
     AuthMode, AuthSpec, EndpointInfo, MethodArgument, MethodCallOutcome, MethodSignature,
-    NodeAttribute, NodeSummary, ReferenceRow, SecurityMode, TreeChild, ValueTree,
+    NodeAttribute, NodeSummary, ReferenceRow, SecurityMode, TreeChild, ValueTree, WriteTarget,
 };
 
 struct Connected {
@@ -575,6 +575,76 @@ impl UaClient {
                 .delete_subscription(sub_id)
                 .await
                 .map_err(|s| anyhow!("delete_subscription failed: {s}"))?;
+        }
+        Ok(())
+    }
+
+    pub async fn read_write_target(
+        &self,
+        node: &NodeId,
+        attr_name: &str,
+    ) -> Result<WriteTarget> {
+        if attr_name != "Value" {
+            return Err(anyhow!("attribute {attr_name} is not editable yet"));
+        }
+        let session = self.session().await?;
+        let to_read = vec![
+            ReadValueId::new(node.clone(), AttributeId::DataType),
+            ReadValueId::new(node.clone(), AttributeId::ValueRank),
+            ReadValueId::new(node.clone(), AttributeId::Value),
+        ];
+        let values = session
+            .read(&to_read, TimestampsToReturn::Neither, 0.0)
+            .await
+            .map_err(|s| anyhow!("read failed: {s}"))?;
+        let mut iter = values.into_iter();
+        let data_type_dv = iter.next().ok_or_else(|| anyhow!("missing DataType"))?;
+        let value_rank_dv = iter.next().ok_or_else(|| anyhow!("missing ValueRank"))?;
+        let value_dv = iter.next().ok_or_else(|| anyhow!("missing Value"))?;
+
+        let data_type = match data_type_dv.value {
+            Some(Variant::NodeId(n)) => *n,
+            other => return Err(anyhow!("unexpected DataType variant: {other:?}")),
+        };
+        let value_rank = match value_rank_dv.value {
+            Some(Variant::Int32(i)) => i,
+            Some(Variant::Empty) | None => -1,
+            other => return Err(anyhow!("unexpected ValueRank variant: {other:?}")),
+        };
+        let type_label = data_type_label(&session, &data_type, value_rank).await;
+        let current_value = match value_dv.value.as_ref() {
+            Some(v) => variant_to_tree(&session, v).format_inline(),
+            None => String::new(),
+        };
+        Ok(WriteTarget {
+            data_type,
+            value_rank,
+            type_label,
+            current_value,
+        })
+    }
+
+    pub async fn write_value(&self, node: &NodeId, value: Variant) -> Result<()> {
+        let session = self.session().await?;
+        let wv = WriteValue {
+            node_id: node.clone(),
+            attribute_id: AttributeId::Value as u32,
+            index_range: NumericRange::default(),
+            value: DataValue {
+                value: Some(value),
+                ..Default::default()
+            },
+        };
+        let results = session
+            .write(&[wv])
+            .await
+            .map_err(|s| anyhow!("write failed: {s}"))?;
+        let status = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("empty write result"))?;
+        if !status.is_good() {
+            return Err(anyhow!("write status: {status}"));
         }
         Ok(())
     }

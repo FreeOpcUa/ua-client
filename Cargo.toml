@@ -13,6 +13,7 @@ categories = ["gui", "network-programming"]
 [features]
 default = ["tui"]
 tui = ["dep:cursive", "dep:arboard"]
+egui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd"]
 
 [dependencies]
 anyhow = "1"
@@ -31,10 +32,10 @@ eframe = { version = "0.30", default-features = false, features = [
   "persistence",
   "wayland",
   "x11"
-] }
-egui = "0.30"
-egui_extras = "0.30"
-rfd = "0.15"
+], optional = true }
+egui = { version = "0.30", optional = true }
+egui_extras = { version = "0.30", optional = true }
+rfd = { version = "0.15", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [
@@ -49,3 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [[bin]]
 name = "ua-tui"
 required-features = ["tui"]
+
+[[bin]]
+name = "ua-client"
+required-features = ["egui"]

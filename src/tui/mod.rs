@@ -873,8 +873,12 @@ Subscriptions:
   Shift+s            Unsubscribe selected node
 
 Attribute editing:
-  e                  Edit the attribute under the Attributes pane cursor
-                     (only Value is writable for now)
+  e                  Edit the attribute under the Attributes pane cursor.
+                     Writable: Value, DisplayName, Description, BrowseName,
+                     Historizing, Executable, UserExecutable, IsAbstract,
+                     Symmetric, ContainsNoLoops, WriteMask, UserWriteMask,
+                     AccessLevelEx, AccessLevel, UserAccessLevel,
+                     EventNotifier, MinimumSamplingInterval, ValueRank.
 
 Other:
   q / Ctrl+C         Quit (disconnects cleanly first)

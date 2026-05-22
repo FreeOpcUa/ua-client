@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use opcua::types::NodeId;
 
-use crate::client::{UaClient, parse_variant};
+use crate::client::{UaClient, parse_attribute_value, parse_variant};
 use crate::messages::{UiAction, UiUpdate};
 use crate::model::{AppModel, AttributeEditState, ConnectionState, DetailTab, MethodCallState};
 use crate::types::{AuthSpec, EndpointInfo, SubscriptionRow, ValueTree};
@@ -550,7 +550,7 @@ impl Engine {
         else {
             return;
         };
-        let value = match parse_variant(edited, &target.data_type, target.value_rank) {
+        let value = match parse_attribute_value(&target.spec, edited) {
             Ok(v) => v,
             Err(e) => {
                 if let Some(AttributeEditState::Inputs { field_error, .. }) =
@@ -571,7 +571,7 @@ impl Engine {
             target,
             edited,
         });
-        self.spawn_write_value(ctx, node, attr_name, value);
+        self.spawn_write_attribute(ctx, node, attr_name, value);
     }
 
     fn spawn_read_write_target<C: FrontendCtx>(
@@ -597,7 +597,7 @@ impl Engine {
         });
     }
 
-    fn spawn_write_value<C: FrontendCtx>(
+    fn spawn_write_attribute<C: FrontendCtx>(
         &self,
         ctx: &C,
         node: NodeId,
@@ -609,7 +609,7 @@ impl Engine {
         let ctx = ctx.clone();
         self.rt.spawn(async move {
             let result = client
-                .write_value(&node, value)
+                .write_attribute(&node, &attr_name, value)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::AttributeWriteFinished {

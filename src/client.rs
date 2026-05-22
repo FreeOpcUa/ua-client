@@ -13,7 +13,7 @@ use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
 use opcua::types::{
     Argument, Array, AttributeId, BrowseDescription, BrowseDescriptionResultMask, BrowseDirection,
     CallMethodRequest, DataTypeId, DataValue, EndpointDescription, ExpandedNodeId, Guid,
-    Identifier, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
+    Identifier, LocalizedText, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
     MonitoringParameters, NodeClass, NodeClassMask, NodeId, NumericRange, QualifiedName,
     ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn,
     TryFromVariant, TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId, WriteValue,
@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use crate::messages::UiUpdate;
 
 use crate::types::{
-    AuthMode, AuthSpec, EndpointInfo, MethodArgument, MethodCallOutcome, MethodSignature,
+    AttrSpec, AuthMode, AuthSpec, EndpointInfo, MethodArgument, MethodCallOutcome, MethodSignature,
     NodeAttribute, NodeSummary, ReferenceRow, SecurityMode, TreeChild, ValueTree, WriteTarget,
 };
 
@@ -584,51 +584,48 @@ impl UaClient {
         node: &NodeId,
         attr_name: &str,
     ) -> Result<WriteTarget> {
-        if attr_name != "Value" {
-            return Err(anyhow!("attribute {attr_name} is not editable yet"));
-        }
         let session = self.session().await?;
-        let to_read = vec![
-            ReadValueId::new(node.clone(), AttributeId::DataType),
-            ReadValueId::new(node.clone(), AttributeId::ValueRank),
-            ReadValueId::new(node.clone(), AttributeId::Value),
-        ];
+        if attr_name == "Value" {
+            return read_value_write_target(&session, node).await;
+        }
+        let Some((attr_id, spec)) = fixed_attribute_spec(attr_name) else {
+            return Err(anyhow!("attribute {attr_name} is not editable yet"));
+        };
+        let to_read = vec![ReadValueId::new(node.clone(), attr_id)];
         let values = session
             .read(&to_read, TimestampsToReturn::Neither, 0.0)
             .await
             .map_err(|s| anyhow!("read failed: {s}"))?;
-        let mut iter = values.into_iter();
-        let data_type_dv = iter.next().ok_or_else(|| anyhow!("missing DataType"))?;
-        let value_rank_dv = iter.next().ok_or_else(|| anyhow!("missing ValueRank"))?;
-        let value_dv = iter.next().ok_or_else(|| anyhow!("missing Value"))?;
-
-        let data_type = match data_type_dv.value {
-            Some(Variant::NodeId(n)) => *n,
-            other => return Err(anyhow!("unexpected DataType variant: {other:?}")),
-        };
-        let value_rank = match value_rank_dv.value {
-            Some(Variant::Int32(i)) => i,
-            Some(Variant::Empty) | None => -1,
-            other => return Err(anyhow!("unexpected ValueRank variant: {other:?}")),
-        };
-        let type_label = data_type_label(&session, &data_type, value_rank).await;
-        let current_value = match value_dv.value.as_ref() {
-            Some(v) => variant_to_tree(&session, v).format_inline(),
-            None => String::new(),
-        };
+        let dv = values
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("missing attribute value"))?;
+        let current_value = format_attribute_current(&session, &spec, dv.value.as_ref());
+        let type_label = fixed_type_label(&spec).to_string();
         Ok(WriteTarget {
-            data_type,
-            value_rank,
+            spec,
             type_label,
             current_value,
         })
     }
 
-    pub async fn write_value(&self, node: &NodeId, value: Variant) -> Result<()> {
+    pub async fn write_attribute(
+        &self,
+        node: &NodeId,
+        attr_name: &str,
+        value: Variant,
+    ) -> Result<()> {
+        let attr_id = if attr_name == "Value" {
+            AttributeId::Value
+        } else {
+            fixed_attribute_spec(attr_name)
+                .map(|(id, _)| id)
+                .ok_or_else(|| anyhow!("attribute {attr_name} is not editable yet"))?
+        };
         let session = self.session().await?;
         let wv = WriteValue {
             node_id: node.clone(),
-            attribute_id: AttributeId::Value as u32,
+            attribute_id: attr_id as u32,
             index_range: NumericRange::default(),
             value: DataValue {
                 value: Some(value),
@@ -817,6 +814,121 @@ fn builtin_data_type_label(id: &NodeId) -> Option<&'static str> {
         x if x == DataTypeId::LocalizedText as u32 => "LocalizedText",
         _ => return None,
     })
+}
+
+async fn read_value_write_target(session: &Session, node: &NodeId) -> Result<WriteTarget> {
+    let to_read = vec![
+        ReadValueId::new(node.clone(), AttributeId::DataType),
+        ReadValueId::new(node.clone(), AttributeId::ValueRank),
+        ReadValueId::new(node.clone(), AttributeId::Value),
+    ];
+    let values = session
+        .read(&to_read, TimestampsToReturn::Neither, 0.0)
+        .await
+        .map_err(|s| anyhow!("read failed: {s}"))?;
+    let mut iter = values.into_iter();
+    let data_type_dv = iter.next().ok_or_else(|| anyhow!("missing DataType"))?;
+    let value_rank_dv = iter.next().ok_or_else(|| anyhow!("missing ValueRank"))?;
+    let value_dv = iter.next().ok_or_else(|| anyhow!("missing Value"))?;
+
+    let data_type = match data_type_dv.value {
+        Some(Variant::NodeId(n)) => *n,
+        other => return Err(anyhow!("unexpected DataType variant: {other:?}")),
+    };
+    let value_rank = match value_rank_dv.value {
+        Some(Variant::Int32(i)) => i,
+        Some(Variant::Empty) | None => -1,
+        other => return Err(anyhow!("unexpected ValueRank variant: {other:?}")),
+    };
+    let type_label = data_type_label(session, &data_type, value_rank).await;
+    let current_value = match value_dv.value.as_ref() {
+        Some(v) => variant_to_tree(session, v).format_inline(),
+        None => String::new(),
+    };
+    Ok(WriteTarget {
+        spec: AttrSpec::Value { data_type, value_rank },
+        type_label,
+        current_value,
+    })
+}
+
+fn fixed_attribute_spec(attr_name: &str) -> Option<(AttributeId, AttrSpec)> {
+    Some(match attr_name {
+        "DisplayName" => (AttributeId::DisplayName, AttrSpec::LocalizedText),
+        "Description" => (AttributeId::Description, AttrSpec::LocalizedText),
+        "BrowseName" => (AttributeId::BrowseName, AttrSpec::QualifiedName),
+        "Historizing" => (AttributeId::Historizing, AttrSpec::Boolean),
+        "Executable" => (AttributeId::Executable, AttrSpec::Boolean),
+        "UserExecutable" => (AttributeId::UserExecutable, AttrSpec::Boolean),
+        "IsAbstract" => (AttributeId::IsAbstract, AttrSpec::Boolean),
+        "Symmetric" => (AttributeId::Symmetric, AttrSpec::Boolean),
+        "ContainsNoLoops" => (AttributeId::ContainsNoLoops, AttrSpec::Boolean),
+        "WriteMask" => (AttributeId::WriteMask, AttrSpec::UInt32),
+        "UserWriteMask" => (AttributeId::UserWriteMask, AttrSpec::UInt32),
+        "AccessLevelEx" => (AttributeId::AccessLevelEx, AttrSpec::UInt32),
+        "AccessLevel" => (AttributeId::AccessLevel, AttrSpec::Byte),
+        "UserAccessLevel" => (AttributeId::UserAccessLevel, AttrSpec::Byte),
+        "EventNotifier" => (AttributeId::EventNotifier, AttrSpec::Byte),
+        "MinimumSamplingInterval" => (AttributeId::MinimumSamplingInterval, AttrSpec::Double),
+        "ValueRank" => (AttributeId::ValueRank, AttrSpec::Int32),
+        _ => return None,
+    })
+}
+
+fn fixed_type_label(spec: &AttrSpec) -> &'static str {
+    match spec {
+        AttrSpec::Value { .. } => "Value",
+        AttrSpec::LocalizedText => "LocalizedText",
+        AttrSpec::QualifiedName => "QualifiedName",
+        AttrSpec::Boolean => "Boolean",
+        AttrSpec::UInt32 => "UInt32",
+        AttrSpec::Byte => "Byte",
+        AttrSpec::Double => "Double",
+        AttrSpec::Int32 => "Int32",
+    }
+}
+
+fn format_attribute_current(session: &Session, spec: &AttrSpec, value: Option<&Variant>) -> String {
+    let Some(v) = value else { return String::new() };
+    if matches!(spec, AttrSpec::QualifiedName)
+        && let Variant::QualifiedName(q) = v
+    {
+        return if q.namespace_index == 0 {
+            q.name.to_string()
+        } else {
+            format!("{}:{}", q.namespace_index, q.name)
+        };
+    }
+    variant_to_tree(session, v).format_inline()
+}
+
+pub fn parse_attribute_value(spec: &AttrSpec, input: &str) -> Result<Variant, String> {
+    let s = input.trim();
+    match spec {
+        AttrSpec::Value { data_type, value_rank } => parse_variant(input, data_type, *value_rank),
+        AttrSpec::LocalizedText => Ok(Variant::LocalizedText(Box::new(LocalizedText::from(s)))),
+        AttrSpec::QualifiedName => Ok(Variant::QualifiedName(Box::new(parse_qualified_name(s)))),
+        AttrSpec::Boolean => s
+            .parse::<bool>()
+            .map(Variant::Boolean)
+            .map_err(|e| format!("invalid Boolean: {e}")),
+        AttrSpec::UInt32 => s
+            .parse::<u32>()
+            .map(Variant::UInt32)
+            .map_err(|e| format!("invalid UInt32: {e}")),
+        AttrSpec::Byte => s
+            .parse::<u8>()
+            .map(Variant::Byte)
+            .map_err(|e| format!("invalid Byte: {e}")),
+        AttrSpec::Double => s
+            .parse::<f64>()
+            .map(Variant::Double)
+            .map_err(|e| format!("invalid Double: {e}")),
+        AttrSpec::Int32 => s
+            .parse::<i32>()
+            .map(Variant::Int32)
+            .map_err(|e| format!("invalid Int32: {e}")),
+    }
 }
 
 /// Parse a user-typed string into a `Variant` of the expected `data_type`.

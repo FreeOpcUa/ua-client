@@ -4,8 +4,8 @@ A native OPC UA browser/inspector in Rust. Connect to a server, browse the addre
 
 Ships two front-ends sharing the same MVU core:
 
-- **`ua-tui`** — terminal UI built on [`cursive`](https://crates.io/crates/cursive). Currently ahead feature-wise.
-- **`ua-client`** — egui/eframe desktop GUI.
+- **`ua-tui`** — terminal UI built on [`cursive`](https://crates.io/crates/cursive). **Built by default.** Currently the focus of development.
+- **`ua-client`** — egui/eframe desktop GUI. **Opt-in** via the `egui` feature; lagging behind the TUI feature-wise.
 
 Both are built on [`async-opcua`](https://crates.io/crates/async-opcua).
 
@@ -22,12 +22,14 @@ Both are built on [`async-opcua`](https://crates.io/crates/async-opcua).
 
 ## Build & run
 
+The TUI is the only front-end built by default. The egui GUI is gated behind the `egui` feature so the default build stays lean.
+
 ```bash
-# TUI (recommended)
+# TUI (default)
 cargo run --bin ua-tui
 
-# egui GUI
-cargo run --bin ua-client
+# egui GUI (opt-in)
+cargo run --features egui --bin ua-client
 ```
 
 Set `RUST_LOG` to control verbosity; the default is `info,opcua=info,ua_client=debug`.
@@ -76,6 +78,19 @@ Method:
 |---|---|
 | `c` | Call selected Method (opens input dialog) |
 
+Subscriptions (acts on the selected tree node):
+
+| Key | Action |
+|---|---|
+| `s` | Subscribe — live value appears in the Subscriptions pane |
+| `Shift+s` | Unsubscribe |
+
+Attribute editing (acts on the row under the Attributes pane cursor):
+
+| Key | Action |
+|---|---|
+| `e` | Open the edit dialog. Writable: `Value`, `DisplayName`, `Description`, `BrowseName`, `Historizing`, `Executable`, `UserExecutable`, `IsAbstract`, `Symmetric`, `ContainsNoLoops`, `WriteMask`, `UserWriteMask`, `AccessLevelEx`, `AccessLevel`, `UserAccessLevel`, `EventNotifier`, `MinimumSamplingInterval`, `ValueRank`. |
+
 Resize (focus-dependent — moves the boundary of the focused pane):
 
 | Key | Effect |
@@ -99,9 +114,11 @@ The log panel prints the cert path on every encrypted connection attempt and a h
 
 ## Status
 
-Working: browse, read attributes / references, Anonymous / Username / X.509 identity tokens, **Method.Call**, encrypted (`Sign` and `SignAndEncrypt`) endpoints.
+Working in `ua-tui`: browse, read attributes / references, Anonymous / Username / X.509 identity tokens, **Method.Call**, encrypted (`Sign` and `SignAndEncrypt`) endpoints, **data-change subscriptions** (live Subscriptions pane), **attribute writes** for the built-in primitive types.
 
-Not yet implemented: subscriptions (Events / Data Changes tabs), writing attribute values, custom-type editing for method inputs that aren't built-in primitives.
+Not yet implemented: event subscriptions, ArrayDimensions / role-permission edits, custom-type editing for method inputs and Value writes that aren't built-in primitives.
+
+The `ua-client` (egui) front-end is lagging behind the TUI; build it with `--features egui` if you want to try it.
 
 ## License
 

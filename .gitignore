@@ -1,5 +1,6 @@
 /target
 comments.md
+.claude
 
 # Generated at runtime by async-opcua's create_sample_keypair(true).
 pki/

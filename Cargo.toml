@@ -26,6 +26,7 @@ async-opcua = { version = "0.18", default-features = false, features = [
 cursive = { version = "0.21", default-features = false, features = [
   "crossterm-backend"
 ], optional = true }
+futures = "0.3"
 eframe = { version = "0.30", default-features = false, features = [
   "default_fonts",
   "glow",

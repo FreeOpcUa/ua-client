@@ -5,8 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use futures::StreamExt;
 use opcua::client::custom_types::DataTypeTreeBuilder;
-use opcua::client::{ClientBuilder, DataChangeCallback, IdentityToken, Session};
+use opcua::client::{
+    ClientBuilder, DataChangeCallback, IdentityToken, Session, SessionPollResult,
+};
 use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
 use opcua::types::json::{JsonEncodable, JsonStreamWriter, JsonWriter};
@@ -15,7 +18,7 @@ use opcua::types::{
     CallMethodRequest, DataTypeId, DataValue, EndpointDescription, ExpandedNodeId, Guid,
     Identifier, LocalizedText, MessageSecurityMode, MonitoredItemCreateRequest, MonitoringMode,
     MonitoringParameters, NodeClass, NodeClassMask, NodeId, NumericRange, QualifiedName,
-    ReadValueId, ReferenceDescription, ReferenceTypeId, StatusCode, TimestampsToReturn,
+    ReadValueId, ReferenceDescription, ReferenceTypeId, TimestampsToReturn,
     TryFromVariant, TypeLoader, UAString, UserTokenType, Variant, VariantScalarTypeId, WriteValue,
 };
 use tokio::sync::Mutex;
@@ -31,7 +34,7 @@ use crate::types::{
 
 struct Connected {
     session: Arc<Session>,
-    event_loop: JoinHandle<StatusCode>,
+    event_loop: JoinHandle<()>,
     sub: Option<SubState>,
 }
 
@@ -82,6 +85,7 @@ impl UaClient {
         endpoint_url: &str,
         endpoint: Option<&EndpointInfo>,
         auth: &AuthSpec,
+        update_tx: mpsc::UnboundedSender<UiUpdate>,
     ) -> Result<()> {
         let mut guard = self.state.lock().await;
         if matches!(*guard, State::Connected(_)) {
@@ -154,17 +158,30 @@ impl UaClient {
                 anyhow!("connect_to_endpoint_directly failed: {e}")
             })?;
 
-        let mut handle = event_loop.spawn();
-        let session_for_wait = session.clone();
-        let connected = tokio::select! {
-            res = &mut handle => {
-                return Err(anyhow!(
-                    "session ended before connection was established: {res:?}"
-                ));
+        let handle = tokio::spawn(async move {
+            let mut stream = std::pin::pin!(event_loop.enter());
+            while let Some(res) = stream.next().await {
+                match res {
+                    Ok(SessionPollResult::ConnectionLost(_)) => {
+                        let _ = update_tx.send(UiUpdate::ConnectionLost);
+                    }
+                    Ok(SessionPollResult::Reconnected(_)) => {
+                        let _ = update_tx.send(UiUpdate::Reconnected);
+                    }
+                    Ok(SessionPollResult::ReconnectFailed(code)) => {
+                        let _ = update_tx.send(UiUpdate::ReconnectFailed(code.to_string()));
+                    }
+                    _ => {}
+                }
             }
-            c = session_for_wait.wait_for_connection() => c,
-        };
-        if !connected {
+        });
+        let session_for_wait = session.clone();
+        let connected = tokio::time::timeout(
+            INITIAL_CONNECT_TIMEOUT,
+            session_for_wait.wait_for_connection(),
+        )
+        .await;
+        if !matches!(connected, Ok(true)) {
             handle.abort();
             return Err(anyhow!("failed to establish connection"));
         }
@@ -1281,6 +1298,7 @@ fn build_identity_token(auth: &AuthSpec) -> Result<IdentityToken> {
 
 const APPLICATION_NAME: &str = "Rust OPC UA Client from FreeOpcUa";
 const APPLICATION_URI: &str = "urn:FreeOpcUa:ua-client";
+const INITIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn warn_insecure_default() {
     tracing::warn!(
@@ -1296,7 +1314,9 @@ fn build_client(verify_cert_metadata: bool) -> Result<opcua::client::Client> {
         .trust_server_certs(true)
         .verify_server_certs(verify_cert_metadata)
         .create_sample_keypair(true)
-        .session_retry_limit(0)
+        .session_retry_limit(-1)
+        .keep_alive_interval(Duration::from_secs(10))
+        .max_failed_keep_alive_count(3)
         .client()
         .map_err(|errs| anyhow!("failed to build OPC UA client: {errs:?}"))
 }

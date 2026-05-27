@@ -103,6 +103,7 @@ pub enum ConnectionState {
     Disconnected,
     Connecting,
     Connected,
+    Reconnecting,
     Disconnecting,
 }
 

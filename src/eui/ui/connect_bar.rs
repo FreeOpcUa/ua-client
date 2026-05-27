@@ -119,6 +119,9 @@ fn draw_status(ui: &mut egui::Ui, model: &AppModel) {
         ConnectionState::Disconnected => ("Disconnected", egui::Color32::GRAY),
         ConnectionState::Connecting => ("Connecting…", egui::Color32::YELLOW),
         ConnectionState::Connected => ("Connected", egui::Color32::LIGHT_GREEN),
+        ConnectionState::Reconnecting => {
+            ("⚠ Reconnecting…", egui::Color32::from_rgb(230, 150, 40))
+        }
         ConnectionState::Disconnecting => ("Disconnecting…", egui::Color32::YELLOW),
     };
     ui.colored_label(color, label);

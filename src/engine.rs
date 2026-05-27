@@ -82,6 +82,20 @@ impl Engine {
                 self.model.connection = ConnectionState::Disconnected;
                 tracing::error!("connect failed: {e}");
             }
+            UiUpdate::ConnectionLost => {
+                self.model.connection = ConnectionState::Reconnecting;
+                tracing::warn!("connection lost — reconnecting…");
+            }
+            UiUpdate::Reconnected => {
+                if self.model.connection == ConnectionState::Reconnecting {
+                    self.model.connection = ConnectionState::Connected;
+                    tracing::info!("reconnected to {}", self.model.endpoint_url);
+                    if let Some(node) = self.model.selected.clone() {
+                        self.spawn_node_summary(ctx, node);
+                    }
+                }
+            }
+            UiUpdate::ReconnectFailed(e) => tracing::debug!("reconnect attempt failed: {e}"),
             UiUpdate::DisconnectStarted => self.model.connection = ConnectionState::Disconnecting,
             UiUpdate::DisconnectFinished => {
                 self.model.connection = ConnectionState::Disconnected;
@@ -862,7 +876,7 @@ impl Engine {
         let _ = tx.send(UiUpdate::ConnectStarted);
         self.rt.spawn(async move {
             let r = client
-                .connect(&url, endpoint.as_ref(), &auth)
+                .connect(&url, endpoint.as_ref(), &auth, tx.clone())
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::ConnectFinished(r));

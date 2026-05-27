@@ -51,6 +51,9 @@ pub enum UiUpdate {
     ConnectFinished(Result<(), String>),
     DisconnectStarted,
     DisconnectFinished,
+    ConnectionLost,
+    Reconnected,
+    ReconnectFailed(String),
     ChildrenLoaded {
         parent: NodeId,
         children: Result<Vec<TreeChild>, String>,

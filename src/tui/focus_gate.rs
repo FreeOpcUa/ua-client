@@ -1,5 +1,7 @@
+use cursive::Printer;
 use cursive::direction::Direction;
 use cursive::event::{Event, EventResult};
+use cursive::style::{BaseColor, Color, ColorStyle};
 use cursive::view::{CannotFocus, View, ViewWrapper};
 
 pub struct FocusGate<V> {
@@ -36,6 +38,15 @@ impl<V: View> ViewWrapper for FocusGate<V> {
             self.inner.on_event(event)
         } else {
             EventResult::Ignored
+        }
+    }
+
+    fn wrap_draw(&self, printer: &Printer) {
+        if self.enabled {
+            self.inner.draw(printer);
+        } else {
+            let dimmed = ColorStyle::front(Color::Light(BaseColor::Black));
+            printer.with_color(dimmed, |p| self.inner.draw(p));
         }
     }
 }

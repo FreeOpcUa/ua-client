@@ -408,7 +408,9 @@ fn request_quit(siv: &mut Cursive) {
     let conn = st.engine.model.connection;
     match conn {
         ConnectionState::Disconnected => siv.quit(),
-        ConnectionState::Connected | ConnectionState::Connecting => {
+        ConnectionState::Connected
+        | ConnectionState::Connecting
+        | ConnectionState::Reconnecting => {
             tracing::info!("quit requested — disconnecting first (press again to force)");
             st.pending_quit = true;
             dispatch_action(siv, UiAction::DisconnectClicked);
@@ -442,7 +444,9 @@ fn final_disconnect(siv: &mut Cursive) {
     if let Some(st) = siv.user_data::<TuiState>()
         && matches!(
             st.engine.model.connection,
-            ConnectionState::Connected | ConnectionState::Connecting
+            ConnectionState::Connected
+                | ConnectionState::Connecting
+                | ConnectionState::Reconnecting
         )
     {
         let client = st.engine.client.clone();
@@ -912,7 +916,10 @@ fn refresh_all(siv: &mut Cursive) {
 fn refresh_focus_gates(siv: &mut Cursive, snap: &ModelSnapshot) {
     let c = snap.connection;
     let disconnected = matches!(c, ConnectionState::Disconnected);
-    let in_session = matches!(c, ConnectionState::Connected | ConnectionState::Connecting);
+    let in_session = matches!(
+        c,
+        ConnectionState::Connected | ConnectionState::Connecting | ConnectionState::Reconnecting
+    );
     let connected = matches!(c, ConnectionState::Connected);
     set_gate(siv, ID_URL_GATE, disconnected);
     set_gate(siv, ID_HISTORY_GATE, disconnected);
@@ -939,7 +946,9 @@ fn track_connection_change(siv: &mut Cursive) {
     st.last_connection = current;
     let target = match current {
         ConnectionState::Disconnected => ID_URL,
-        ConnectionState::Connecting | ConnectionState::Disconnecting => ID_DISCONNECT_BTN,
+        ConnectionState::Connecting
+        | ConnectionState::Reconnecting
+        | ConnectionState::Disconnecting => ID_DISCONNECT_BTN,
         ConnectionState::Connected => ID_TREE,
     };
     siv.focus_name(target).ok();
@@ -1008,6 +1017,7 @@ fn refresh_title(siv: &mut Cursive, snap: &ModelSnapshot) {
         ConnectionState::Disconnected => "Disconnected".to_string(),
         ConnectionState::Connecting => "Connecting…".to_string(),
         ConnectionState::Connected => "Connected".to_string(),
+        ConnectionState::Reconnecting => "⚠ Reconnecting…".to_string(),
         ConnectionState::Disconnecting => "Disconnecting…".to_string(),
     };
     siv.call_on_name(ID_TITLE, |v: &mut TextView| {
@@ -1127,7 +1137,11 @@ fn build_tree_rows(model: &AppModel) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let label = "Root".to_string();
     let root = model.root_node.clone();
-    let selected = model.selected.as_ref();
+    let selected = if matches!(model.connection, ConnectionState::Connected) {
+        model.selected.as_ref()
+    } else {
+        None
+    };
     let has_children = model
         .tree
         .children

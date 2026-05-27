@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow};
 use futures::StreamExt;
 use opcua::client::custom_types::DataTypeTreeBuilder;
 use opcua::client::{
-    ClientBuilder, DataChangeCallback, IdentityToken, Session, SessionPollResult,
+    ClientBuilder, DataChangeCallback, IdentityToken, Session, SessionConnectMode, SessionPollResult,
 };
 use opcua::crypto::SecurityPolicy;
 use opcua::types::custom::{DynamicStructure, DynamicTypeLoader};
@@ -165,8 +165,9 @@ impl UaClient {
                     Ok(SessionPollResult::ConnectionLost(_)) => {
                         let _ = update_tx.send(UiUpdate::ConnectionLost);
                     }
-                    Ok(SessionPollResult::Reconnected(_)) => {
-                        let _ = update_tx.send(UiUpdate::Reconnected);
+                    Ok(SessionPollResult::Reconnected(mode)) => {
+                        let fresh = matches!(mode, SessionConnectMode::NewSession(_));
+                        let _ = update_tx.send(UiUpdate::Reconnected { fresh });
                     }
                     Ok(SessionPollResult::ReconnectFailed(code)) => {
                         let _ = update_tx.send(UiUpdate::ReconnectFailed(code.to_string()));
@@ -311,6 +312,17 @@ impl UaClient {
         let _ = connected.session.disconnect().await;
         let _ = connected.event_loop.await;
         Ok(())
+    }
+
+    /// Drop the client-side subscription bookkeeping so the next `subscribe`
+    /// creates a fresh server-side subscription. Used after reconnecting to a
+    /// new session, where the previous subscription and monitored items no
+    /// longer exist on the server.
+    pub async fn reset_subscription_state(&self) {
+        let mut guard = self.state.lock().await;
+        if let State::Connected(c) = &mut *guard {
+            c.sub = None;
+        }
     }
 
     async fn session(&self) -> Result<Arc<Session>> {
@@ -1317,6 +1329,7 @@ fn build_client(verify_cert_metadata: bool) -> Result<opcua::client::Client> {
         .session_retry_limit(-1)
         .keep_alive_interval(Duration::from_secs(10))
         .max_failed_keep_alive_count(3)
+        .recreate_subscriptions(false)
         .client()
         .map_err(|errs| anyhow!("failed to build OPC UA client: {errs:?}"))
 }

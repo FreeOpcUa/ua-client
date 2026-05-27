@@ -202,7 +202,6 @@ fn save_state(siv: &mut Cursive) {
     });
 }
 
-
 pub(super) struct TuiState {
     pub(super) engine: Engine,
     pub(super) ctx: CursiveCtx,
@@ -362,10 +361,7 @@ fn sync_dialog(siv: &mut Cursive) {
 
 fn sync_method_dialog(siv: &mut Cursive) {
     let (want, have) = match siv.user_data::<TuiState>() {
-        Some(st) => (
-            st.engine.model.method_call.is_some(),
-            st.method_dialog_open,
-        ),
+        Some(st) => (st.engine.model.method_call.is_some(), st.method_dialog_open),
         None => return,
     };
     if want && !have {
@@ -552,10 +548,13 @@ fn with_subs_resize<V: cursive::view::View + 'static>(view: V) -> OnEventView<V>
 
 fn resize_subs(siv: &mut Cursive, delta: isize) {
     let Some(h) = siv.user_data::<TuiState>().map(|st| {
-        let h = (st.subs_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        let h = (st.subs_height as isize + delta)
+            .clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
         st.subs_height = h;
         h
-    }) else { return };
+    }) else {
+        return;
+    };
     siv.call_on_name(ID_SUBS_SIZE, |v: &mut ResizedView<BoxedView>| {
         v.set_height(SizeConstraint::Fixed(h));
     });
@@ -563,10 +562,13 @@ fn resize_subs(siv: &mut Cursive, delta: isize) {
 
 fn resize_tree(siv: &mut Cursive, delta: isize) {
     let Some(width) = siv.user_data::<TuiState>().map(|st| {
-        let w = (st.tree_width as isize + delta).clamp(MIN_TREE_WIDTH as isize, MAX_TREE_WIDTH as isize) as usize;
+        let w = (st.tree_width as isize + delta)
+            .clamp(MIN_TREE_WIDTH as isize, MAX_TREE_WIDTH as isize) as usize;
         st.tree_width = w;
         w
-    }) else { return };
+    }) else {
+        return;
+    };
     siv.call_on_name(ID_TREE_SIZE, |v: &mut ResizedView<BoxedView>| {
         v.set_width(SizeConstraint::Fixed(width));
     });
@@ -574,10 +576,13 @@ fn resize_tree(siv: &mut Cursive, delta: isize) {
 
 fn resize_attrs(siv: &mut Cursive, delta: isize) {
     let Some(h) = siv.user_data::<TuiState>().map(|st| {
-        let h = (st.attrs_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        let h = (st.attrs_height as isize + delta)
+            .clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
         st.attrs_height = h;
         h
-    }) else { return };
+    }) else {
+        return;
+    };
     siv.call_on_name(ID_ATTRS_SIZE, |v: &mut ResizedView<BoxedView>| {
         v.set_height(SizeConstraint::Fixed(h));
     });
@@ -585,10 +590,13 @@ fn resize_attrs(siv: &mut Cursive, delta: isize) {
 
 fn resize_log(siv: &mut Cursive, delta: isize) {
     let Some(h) = siv.user_data::<TuiState>().map(|st| {
-        let h = (st.log_height as isize + delta).clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
+        let h = (st.log_height as isize + delta)
+            .clamp(MIN_PANE_HEIGHT as isize, MAX_PANE_HEIGHT as isize) as usize;
         st.log_height = h;
         h
-    }) else { return };
+    }) else {
+        return;
+    };
     siv.call_on_name(ID_LOG_SIZE, |v: &mut ResizedView<BoxedView>| {
         v.set_height(SizeConstraint::Fixed(h));
     });
@@ -614,8 +622,10 @@ fn maybe_init_sizes(siv: &mut Cursive) {
     let attrs_and_refs_borders = 2 * FRAME_BORDER_HEIGHT;
     let chrome = TITLE_HEIGHT + CONNECT_BAR_HEIGHT + log_pane + attrs_and_refs_borders;
     let central = (screen_height as isize - chrome as isize).max(MIN_PANE_HEIGHT as isize * 2);
-    let attrs = (((central * 2) / 3) as usize)
-        .clamp(MIN_PANE_HEIGHT, (central as usize).saturating_sub(MIN_PANE_HEIGHT));
+    let attrs = (((central * 2) / 3) as usize).clamp(
+        MIN_PANE_HEIGHT,
+        (central as usize).saturating_sub(MIN_PANE_HEIGHT),
+    );
 
     if let Some(st) = siv.user_data::<TuiState>() {
         st.attrs_height = attrs;
@@ -743,9 +753,7 @@ fn build_tree_view() -> impl cursive::view::View {
 }
 
 fn build_attrs_view() -> impl cursive::view::View {
-    SelectView::<String>::new()
-        .with_name(ID_ATTRS)
-        .scrollable()
+    SelectView::<String>::new().with_name(ID_ATTRS).scrollable()
 }
 
 fn build_refs_view() -> impl cursive::view::View {
@@ -816,7 +824,13 @@ fn install_global_keys(siv: &mut Cursive) {
         };
         let subscribed = s
             .user_data::<TuiState>()
-            .map(|st| st.engine.model.subscriptions.iter().any(|r| r.node_id == node))
+            .map(|st| {
+                st.engine
+                    .model
+                    .subscriptions
+                    .iter()
+                    .any(|r| r.node_id == node)
+            })
             .unwrap_or(false);
         if !subscribed {
             return;
@@ -1017,7 +1031,7 @@ fn refresh_title(siv: &mut Cursive, snap: &ModelSnapshot) {
         ConnectionState::Disconnected => "Disconnected".to_string(),
         ConnectionState::Connecting => "Connecting…".to_string(),
         ConnectionState::Connected => "Connected".to_string(),
-        ConnectionState::Reconnecting => "⚠ Reconnecting…".to_string(),
+        ConnectionState::Reconnecting => "⚠ Connection lost, Attempting to reconnect…".to_string(),
         ConnectionState::Disconnecting => "Disconnecting…".to_string(),
     };
     siv.call_on_name(ID_TITLE, |v: &mut TextView| {
@@ -1112,7 +1126,10 @@ fn refresh_subs(siv: &mut Cursive, snap: &ModelSnapshot) {
         let cursor = v.selection().map(|n| (*n).clone());
         v.clear();
         if snap.subs_rows.is_empty() {
-            v.add_item("(no subscriptions — press s on a node to subscribe)", NodeId::null());
+            v.add_item(
+                "(no subscriptions — press s on a node to subscribe)",
+                NodeId::null(),
+            );
             return;
         }
         for row in &snap.subs_rows {
@@ -1263,7 +1280,12 @@ fn build_attrs_rows(model: &AppModel) -> (Vec<AttrRow>, String) {
         .iter()
         .map(|a| AttrRow {
             attr_name: a.name.clone(),
-            label: format!("{:<width$} : {}", a.name, a.value.format_inline(), width = name_width),
+            label: format!(
+                "{:<width$} : {}",
+                a.name,
+                a.value.format_inline(),
+                width = name_width
+            ),
         })
         .collect();
     (rows, String::new())

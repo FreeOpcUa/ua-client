@@ -52,7 +52,9 @@ pub enum UiUpdate {
     DisconnectStarted,
     DisconnectFinished,
     ConnectionLost,
-    Reconnected,
+    Reconnected {
+        fresh: bool,
+    },
     ReconnectFailed(String),
     ChildrenLoaded {
         parent: NodeId,

@@ -86,12 +86,15 @@ impl Engine {
                 self.model.connection = ConnectionState::Reconnecting;
                 tracing::warn!("connection lost — reconnecting…");
             }
-            UiUpdate::Reconnected => {
+            UiUpdate::Reconnected { fresh } => {
                 if self.model.connection == ConnectionState::Reconnecting {
                     self.model.connection = ConnectionState::Connected;
                     tracing::info!("reconnected to {}", self.model.endpoint_url);
                     if let Some(node) = self.model.selected.clone() {
                         self.spawn_node_summary(ctx, node);
+                    }
+                    if fresh {
+                        self.resubscribe_all(ctx);
                     }
                 }
             }
@@ -236,6 +239,7 @@ impl Engine {
                 }
                 Err(e) => {
                     self.model.subscribing.remove(&node);
+                    self.model.subscriptions.retain(|r| r.node_id != node);
                     tracing::error!("subscribe {node} failed: {e}");
                 }
             },
@@ -965,6 +969,36 @@ impl Engine {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(UiUpdate::SubscribeFinished { node, result });
+            ctx.request_repaint();
+        });
+    }
+
+    fn resubscribe_all<C: FrontendCtx>(&mut self, ctx: &C) {
+        let nodes: Vec<NodeId> = self
+            .model
+            .subscriptions
+            .iter()
+            .map(|r| r.node_id.clone())
+            .collect();
+        if nodes.is_empty() {
+            return;
+        }
+        for node in &nodes {
+            self.model.subscribing.insert(node.clone());
+        }
+        let client = self.client.clone();
+        let tx = self.update_tx.clone();
+        let data_tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        self.rt.spawn(async move {
+            client.reset_subscription_state().await;
+            for node in nodes {
+                let result = client
+                    .subscribe(node.clone(), data_tx.clone())
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(UiUpdate::SubscribeFinished { node, result });
+            }
             ctx.request_repaint();
         });
     }

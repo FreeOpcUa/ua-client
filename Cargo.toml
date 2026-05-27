@@ -55,3 +55,17 @@ required-features = ["tui"]
 [[bin]]
 name = "ua-client"
 required-features = ["egui"]
+
+[package.metadata.deb]
+name = "ua-tui"
+maintainer = "Olivier Roulet <olivier.roulet@gmail.com>"
+copyright = "2025, FreeOpcUa contributors"
+license-file = ["LICENSE", "0"]
+section = "utils"
+priority = "optional"
+extended-description = "Terminal OPC UA browser/inspector (TUI front-end of ua-client)."
+depends = "$auto"
+assets = [
+  ["target/release/ua-tui", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/ua-tui/README.md", "644"],
+]

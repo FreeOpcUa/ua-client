@@ -1,5 +1,4 @@
 BIN := ua-tui
-BUMP ?= patch
 
 .PHONY: build build-release deb release clean help
 
@@ -14,16 +13,27 @@ deb: ## build a .deb of ua-tui (needs: cargo install cargo-deb)
 	cargo deb
 	@echo "built: $$(ls -1 target/debian/*.deb | tail -1)"
 
-release: ## bump version (BUMP=patch|minor|major), tag, push, and cargo publish
-	@cargo set-version --help >/dev/null 2>&1 || { echo "cargo-edit not found: run 'cargo install cargo-edit'"; exit 1; }
-	@test -z "$$(git status --porcelain)" || { echo "working tree not clean; commit or stash first"; exit 1; }
-	cargo set-version --bump $(BUMP)
-	@VERSION=$$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/'); \
+release: ## bump version (prompts; or BUMP=patch|minor|major|X.Y.Z), tag, push, cargo publish
+	@set -e; \
+	cargo set-version --help >/dev/null 2>&1 || { echo "cargo-edit not found: run 'cargo install cargo-edit'" >&2; exit 1; }; \
+	test -z "$$(git status --porcelain)" || { echo "working tree not clean; commit or stash first" >&2; exit 1; }; \
+	LEVEL="$(BUMP)"; \
+	if [ -z "$$LEVEL" ]; then \
+	  CUR=$$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/'); \
+	  printf "current version %s — bump [patch/minor/major] or enter explicit version: " "$$CUR"; \
+	  read LEVEL; \
+	fi; \
+	case "$$LEVEL" in \
+	  patch|minor|major) cargo set-version --bump "$$LEVEL";; \
+	  "") echo "no version given" >&2; exit 1;; \
+	  *) cargo set-version "$$LEVEL";; \
+	esac; \
+	VERSION=$$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/'); \
 	echo "releasing v$$VERSION"; \
-	cargo publish --dry-run --allow-dirty && \
-	git commit -am "release v$$VERSION" && \
-	git tag -a "v$$VERSION" -m "v$$VERSION" && \
-	git push origin HEAD --follow-tags && \
+	cargo publish --dry-run --allow-dirty; \
+	git commit -am "release v$$VERSION"; \
+	git tag -a "v$$VERSION" -m "v$$VERSION"; \
+	git push origin HEAD --follow-tags; \
 	cargo publish
 
 clean: ## remove build artifacts

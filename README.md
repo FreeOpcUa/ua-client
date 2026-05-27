@@ -9,6 +9,8 @@ Ships two front-ends sharing the same MVU core:
 
 Both are built on [`async-opcua`](https://crates.io/crates/async-opcua).
 
+![ua-client](https://raw.githubusercontent.com/FreeOpcUa/ua-client/main/ua-client.png)
+
 ## Features
 
 - Endpoint URL bar with Connect/Disconnect, history dropdown of past successful connections (persisted across restarts).

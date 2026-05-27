@@ -9,6 +9,7 @@ repository = "https://github.com/FreeOpcUa/ua-client"
 license = "MIT"
 keywords = ["client", "egui", "gui", "opc-ua", "opcua"]
 categories = ["gui", "network-programming"]
+exclude = ["/ua-client.png"]
 
 [features]
 default = ["tui"]

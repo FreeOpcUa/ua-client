@@ -1,6 +1,6 @@
 [package]
 name = "ua-client"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Native OPC UA browser/inspector GUI built on async-opcua and egui"
 readme = "README.md"

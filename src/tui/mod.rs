@@ -163,6 +163,7 @@ fn build_cursive(
 fn bootstrap_session(siv: &mut Cursive) {
     dispatch_action(siv, UiAction::TabSelected(DetailTab::References));
     refresh_all(siv);
+    siv.focus_name(ID_CONNECT_BTN).ok();
 }
 
 fn save_state(siv: &mut Cursive) {
@@ -959,7 +960,7 @@ fn track_connection_change(siv: &mut Cursive) {
     }
     st.last_connection = current;
     let target = match current {
-        ConnectionState::Disconnected => ID_URL,
+        ConnectionState::Disconnected => ID_CONNECT_BTN,
         ConnectionState::Connecting
         | ConnectionState::Reconnecting
         | ConnectionState::Disconnecting => ID_DISCONNECT_BTN,

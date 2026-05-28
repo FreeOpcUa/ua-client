@@ -1,5 +1,5 @@
 use cursive::event::{Event, EventResult};
-use cursive::style::{ColorStyle, Effect, PaletteStyle};
+use cursive::style::{BaseColor, Color, ColorStyle, Effect, PaletteStyle};
 use cursive::view::{View, ViewWrapper};
 use cursive::{Printer, Rect, Vec2};
 
@@ -48,7 +48,7 @@ impl<V: View> ViewWrapper for FocusFrame<V> {
         let (tl, tr, bl, br, hor, ver) = if focused {
             ("┏", "┓", "┗", "┛", "━", "┃")
         } else {
-            ("┌", "┐", "└", "┘", "─", "│")
+            ("┌", "┐", "└", "┘", "┈", "┊")
         };
         let paint = |p: &Printer| {
             p.print((0, 0), tl);
@@ -65,7 +65,8 @@ impl<V: View> ViewWrapper for FocusFrame<V> {
                 p.with_effect(Effect::Bold, paint);
             });
         } else {
-            paint(printer);
+            let dim = ColorStyle::front(Color::Light(BaseColor::Black));
+            printer.with_color(dim, paint);
         }
 
         if !self.title.is_empty() && w >= TITLE_SPACING * 2 + 2 {

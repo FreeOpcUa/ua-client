@@ -1,5 +1,5 @@
 use cursive::event::{Event, EventResult};
-use cursive::theme::Effect;
+use cursive::style::{ColorStyle, Effect, PaletteStyle};
 use cursive::view::{View, ViewWrapper};
 use cursive::{Printer, Rect, Vec2};
 
@@ -61,7 +61,9 @@ impl<V: View> ViewWrapper for FocusFrame<V> {
             p.print_vline((w - 1, 1), h - 2, ver);
         };
         if focused {
-            printer.with_effect(Effect::Bold, paint);
+            printer.with_color(ColorStyle::title_primary(), |p| {
+                p.with_effect(Effect::Bold, paint);
+            });
         } else {
             paint(printer);
         }
@@ -73,7 +75,9 @@ impl<V: View> ViewWrapper for FocusFrame<V> {
             if label_w <= max_w {
                 let x = TITLE_SPACING + (max_w - label_w) / 2;
                 if focused {
-                    printer.with_effect(Effect::Bold, |p| p.print((x, 0), &label));
+                    printer.with_style(PaletteStyle::Highlight, |p| {
+                        p.with_effect(Effect::Bold, |q| q.print((x, 0), &label));
+                    });
                 } else {
                     printer.print((x, 0), &label);
                 }

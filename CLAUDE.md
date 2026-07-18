@@ -1,6 +1,6 @@
 # ua-client
 
-OPC UA browser/inspector GUI in Rust. Uses `async-opcua` (path dep at `../async-opcua/async-opcua`) and `egui`/`eframe`.
+OPC UA browser/inspector in Rust with a terminal UI (`cursive`, default) and a desktop GUI (`egui`/`eframe`). Uses `async-opcua` from crates.io.
 
 ## Build & run
 

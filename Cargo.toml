@@ -2,7 +2,7 @@
 name = "ua-client"
 version = "1.2.0"
 edition = "2024"
-description = "Native OPC UA browser/inspector GUI built on async-opcua and egui"
+description = "OPC UA browser/inspector with a terminal UI and a native egui GUI, built on async-opcua"
 readme = "README.md"
 homepage = "https://github.com/FreeOpcUa/ua-client"
 repository = "https://github.com/FreeOpcUa/ua-client"

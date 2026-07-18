@@ -20,7 +20,7 @@ egui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd"]
 anyhow = "1"
 arboard = { version = "3", optional = true }
 clap = { version = "4", features = ["derive"] }
-async-opcua = { version = "0.18", default-features = false, features = [
+async-opcua = { version = "0.19", default-features = false, features = [
   "client",
   "json"
 ] }

@@ -10,8 +10,8 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
     };
     egui::Frame::default()
         .stroke(egui::Stroke::new(1.0, stroke_color))
-        .rounding(6.0)
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label("URI:");
@@ -47,25 +47,17 @@ fn draw_url(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
 fn draw_history_dropdown(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {
     let editable = matches!(model.connection, ConnectionState::Disconnected);
     let enabled = editable && !model.endpoint_history.is_empty();
-    let popup_id = ui.make_persistent_id("endpoint_history_popup");
     let btn = ui.add_enabled(enabled, egui::Button::new("▾"));
-    if btn.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
-    }
-    egui::popup_below_widget(
-        ui,
-        popup_id,
-        &btn,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui| {
+    egui::Popup::menu(&btn)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .show(|ui| {
             ui.set_min_width(360.0);
             for past in &model.endpoint_history {
                 if ui.selectable_label(false, past).clicked() {
                     actions.push(UiAction::EndpointEdited(past.clone()));
                 }
             }
-        },
-    );
+        });
 }
 
 fn draw_security_info(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<UiAction>) {

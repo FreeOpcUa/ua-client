@@ -1,29 +1,23 @@
-use egui::{Color32, Context, FontFamily, FontId, TextStyle, Visuals};
+use egui::{Color32, Context, FontFamily, FontId, Style, TextStyle, Theme, Visuals};
 
 pub fn apply_high_contrast_visuals(ctx: &Context) {
-    let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(
-        TextStyle::Heading,
-        FontId::new(22.0, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        TextStyle::Body,
-        FontId::new(17.0, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        TextStyle::Button,
-        FontId::new(17.0, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        TextStyle::Monospace,
-        FontId::new(15.0, FontFamily::Monospace),
-    );
-    style.text_styles.insert(
-        TextStyle::Small,
-        FontId::new(13.0, FontFamily::Proportional),
-    );
+    ctx.style_mut_of(Theme::Dark, |style| high_contrast_style(style, true));
+    ctx.style_mut_of(Theme::Light, |style| high_contrast_style(style, false));
+}
 
-    let dark_mode = style.visuals.dark_mode;
+fn high_contrast_style(style: &mut Style, dark_mode: bool) {
+    for (text_style, family, size) in [
+        (TextStyle::Heading, FontFamily::Proportional, 22.0),
+        (TextStyle::Body, FontFamily::Proportional, 17.0),
+        (TextStyle::Button, FontFamily::Proportional, 17.0),
+        (TextStyle::Monospace, FontFamily::Monospace, 15.0),
+        (TextStyle::Small, FontFamily::Proportional, 13.0),
+    ] {
+        style
+            .text_styles
+            .insert(text_style, FontId::new(size, family));
+    }
+
     let mut visuals = if dark_mode {
         Visuals::dark()
     } else {
@@ -46,5 +40,4 @@ pub fn apply_high_contrast_visuals(ctx: &Context) {
     visuals.widgets.active.fg_stroke.color = strong;
     visuals.widgets.open.fg_stroke.color = strong;
     style.visuals = visuals;
-    ctx.set_style(style);
 }

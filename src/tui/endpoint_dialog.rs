@@ -136,7 +136,7 @@ impl ListSnap {
                     .filter(|e| e.security_mode == model.endpoint_mode_filter)
                     .cloned()
                     .collect();
-                filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+                filtered.sort_by_key(|b| std::cmp::Reverse(b.security_level));
                 filtered
             })
             .unwrap_or_default();

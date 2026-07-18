@@ -28,15 +28,15 @@ cursive = { version = "0.21", default-features = false, features = [
   "crossterm-backend"
 ], optional = true }
 futures = "0.3"
-eframe = { version = "0.34", default-features = false, features = [
+eframe = { version = "0.35", default-features = false, features = [
   "default_fonts",
   "glow",
   "persistence",
   "wayland",
   "x11"
 ], optional = true }
-egui = { version = "0.34", optional = true }
-egui_extras = { version = "0.34", optional = true }
+egui = { version = "0.35", optional = true }
+egui_extras = { version = "0.35", optional = true }
 rfd = { version = "0.17", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

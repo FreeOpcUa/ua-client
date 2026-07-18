@@ -27,9 +27,9 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         let id_salt = format!("attr_{i}_{}", attr.name);
         let inner = egui::Frame::default()
             .stroke(egui::Stroke::new(1.0, stroke_color))
-            .rounding(4.0)
-            .inner_margin(egui::Margin::symmetric(6.0, 4.0))
-            .outer_margin(egui::Margin::symmetric(0.0, 2.0))
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .outer_margin(egui::Margin::symmetric(0, 2))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 draw_attribute(ui, &id_salt, attr, &node_id_str, &node_id, actions);
@@ -42,13 +42,13 @@ pub fn draw(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         let mut copy_path_requested = false;
         response.context_menu(|ui| {
             if ui.button("Copy value").clicked() {
-                ui.output_mut(|o| o.copied_text = value_text.clone());
+                ui.ctx().copy_text(value_text.clone());
                 tracing::info!("copied {attr_name}: {value_text}");
-                ui.close_menu();
+                ui.close();
             }
             if is_node_id && ui.button("Copy Path").clicked() {
                 copy_path_requested = true;
-                ui.close_menu();
+                ui.close();
             }
         });
         if copy_path_requested {

@@ -222,8 +222,8 @@ fn section_frame<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) 
     };
     egui::Frame::default()
         .stroke(egui::Stroke::new(1.0, stroke_color))
-        .rounding(4.0)
-        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             add_contents(ui)
@@ -251,7 +251,7 @@ fn draw_endpoints_area(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Ui
         .iter()
         .filter(|e| e.security_mode == model.endpoint_mode_filter)
         .collect();
-    filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+    filtered.sort_by_key(|b| std::cmp::Reverse(b.security_level));
 
     if filtered.is_empty() {
         ui.label(
@@ -285,14 +285,14 @@ fn draw_endpoints_list(
             let is_selected = selected_key.as_ref() == Some(&endpoint_key(ep));
             let frame = egui::Frame::default()
                 .stroke(egui::Stroke::new(1.0, stroke_color))
-                .rounding(4.0)
+                .corner_radius(4.0)
                 .fill(if is_selected {
                     visuals.selection.bg_fill
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .inner_margin(egui::Margin::symmetric(8.0, 6.0))
-                .outer_margin(egui::Margin::symmetric(0.0, 3.0));
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .outer_margin(egui::Margin::symmetric(0, 3));
             let inner = frame.show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.vertical(|ui| {
@@ -314,6 +314,7 @@ fn draw_endpoints_list(
                     response.rect,
                     4.0,
                     egui::Stroke::new(1.5, visuals.widgets.hovered.fg_stroke.color),
+                    egui::StrokeKind::Inside,
                 );
             }
             if response.clicked() && !is_selected {

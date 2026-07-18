@@ -132,13 +132,13 @@ fn draw_references(model: &AppModel, ui: &mut egui::Ui, actions: &mut Vec<UiActi
                         let mut copy_path = false;
                         row.response().context_menu(|ui| {
                             if ui.button("Copy NodeId").clicked() {
-                                ui.output_mut(|o| o.copied_text = id_string.clone());
+                                ui.ctx().copy_text(id_string.clone());
                                 tracing::info!("copied NodeId: {id_string}");
-                                ui.close_menu();
+                                ui.close();
                             }
                             if ui.button("Copy Path").clicked() {
                                 copy_path = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         if copy_path {

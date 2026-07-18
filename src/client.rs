@@ -358,7 +358,7 @@ impl UaClient {
         }
         let target_ids: Vec<NodeId> = children.iter().map(|c| c.node_id.clone()).collect();
         let has_kids = has_children_batch(&session, &target_ids).await;
-        for (child, hk) in children.iter_mut().zip(has_kids.into_iter()) {
+        for (child, hk) in children.iter_mut().zip(has_kids) {
             child.has_children = hk;
         }
         Ok(children)

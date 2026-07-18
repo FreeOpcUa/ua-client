@@ -764,7 +764,7 @@ impl Engine {
                 .iter()
                 .filter(|e| e.security_mode == self.model.endpoint_mode_filter)
                 .collect();
-            filtered.sort_by(|a, b| b.security_level.cmp(&a.security_level));
+            filtered.sort_by_key(|b| std::cmp::Reverse(b.security_level));
             self.model.selected_endpoint = filtered.first().map(|&e| e.clone());
         }
     }

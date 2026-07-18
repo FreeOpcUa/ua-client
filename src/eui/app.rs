@@ -19,8 +19,7 @@ impl FrontendCtx for EguiCtx {
     }
 
     fn set_clipboard(&self, text: &str) {
-        let s = text.to_owned();
-        self.0.output_mut(|o| o.copied_text = s);
+        self.0.copy_text(text.to_owned());
     }
 
     fn pick_file(
@@ -115,13 +114,13 @@ impl UaApp {
 }
 
 impl eframe::App for UaApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let c = EguiCtx(ctx.clone());
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let c = EguiCtx(ui.ctx().clone());
         while let Ok(update) = self.update_rx.try_recv() {
             self.engine.apply_update(&c, update);
         }
         let mut actions = Vec::new();
-        super::ui::draw(&self.engine.model, ctx, &mut actions);
+        super::ui::draw(&self.engine.model, ui, &mut actions);
         for action in actions {
             self.engine.dispatch(&c, action);
         }

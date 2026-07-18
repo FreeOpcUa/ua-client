@@ -1,6 +1,6 @@
 BIN := ua-tui
 
-.PHONY: build build-release deb release clean help
+.PHONY: build build-release deb release update clean help
 
 build: ## debug build of ua-tui
 	cargo build --bin $(BIN)
@@ -35,6 +35,10 @@ release: ## bump version (prompts; or BUMP=patch|minor|major|X.Y.Z), tag, push, 
 	git tag -a "v$$VERSION" -m "v$$VERSION"; \
 	git push origin HEAD --follow-tags; \
 	cargo publish
+
+update: ## update all dependencies in Cargo.lock to latest semver-compatible versions
+	cargo update
+	@echo "note: for major (semver-incompatible) bumps, run 'cargo upgrade --incompatible' (needs cargo-edit)"
 
 clean: ## remove build artifacts
 	cargo clean
